@@ -48,6 +48,8 @@ import { LATEST_REVISION, RECIPE_ID, contentHash, diffTemplates, revision as rec
 import { describeIssues, validateResult, verdictOf } from '@weawr/protocol';
 import type { TeamSnapshot } from '@weawr/protocol';
 import { Enricher } from './enrich.js';
+import { READINESS_KEY_ENV, askReadiness, describeVerdict, missingInWords } from './readiness.js';
+import type { ReadinessVerdict } from './readiness.js';
 import { teamView, indexSnapshot, timelineOf } from './projection.js';
 import { trackerScope as scopeOf } from './identity.js';
 import * as _gitSize from './adapters/git-size.mjs';
@@ -96,6 +98,8 @@ export interface EngineOptions {
   registration?: RegistrationTarget | null;
   /** For pull-request calls to GitHub; a test hands in its own. */
   fetchImpl?: typeof fetch;
+  /** Where settings such as TYPESAFE_API_KEY are read from; the process environment (with the repository's .env files loaded) by default. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** How long one `herdr agent wait` may block before the supervisor re-reads result.json. */
@@ -137,6 +141,9 @@ export class TeamEngine {
   readonly clock: () => Date;
   readonly hooks: EngineHooks;
   readonly fetchImpl: typeof fetch;
+  readonly env: NodeJS.ProcessEnv;
+  /** Readiness verdicts by issue key, when the store is not a durable one (a test); see readinessMemo. */
+  private readinessMemory = new Map<string, any>();
   private readonly logger: (line: string) => void;
   /** Where the process announces itself on this machine; null for an engine that should not (a test, a dry run). */
   registration: RegistrationTarget | null;
@@ -157,7 +164,7 @@ export class TeamEngine {
   /** How many times a pending external action is tried before it is left for a person. */
   static readonly MAX_PENDING_ATTEMPTS = 3;
 
-  constructor({ cfg, tracker, herdr, dry = false, paths, promptsRoot, store, ids, version = '0.0.0', cli = null, git = defaultGit, clock = () => new Date(), log, live, hooks = {}, registration = null, fetchImpl = fetch }: EngineOptions) {
+  constructor({ cfg, tracker, herdr, dry = false, paths, promptsRoot, store, ids, version = '0.0.0', cli = null, git = defaultGit, clock = () => new Date(), log, live, hooks = {}, registration = null, fetchImpl = fetch, env = process.env }: EngineOptions) {
     this.cfg = cfg;
     this.tracker = tracker; // null in smoke mode
     this.herdr = herdr;
@@ -172,6 +179,7 @@ export class TeamEngine {
     this.clock = clock;
     this.hooks = { live: live ?? (() => {}), ...hooks };
     this.fetchImpl = fetchImpl;
+    this.env = env;
     this.logger = log ?? ((line?: any) => console.log(line));
     this.registration = registration;
     this.state = this.store.load();
@@ -513,11 +521,79 @@ export class TeamEngine {
     for (const c of candidates) {
       if (this.runningCount() >= this.cfg.maxConcurrent) { waiting.push(c.key); this.warnOnce(`cap:${c.key}`, `${c.key} matches but waits: global cap ${this.cfg.maxConcurrent} reached`); continue; }
       if (this.runningCount(c.rule.name) >= c.rule.maxConcurrent) { waiting.push(c.key); this.warnOnce(`cap:${c.key}`, `${c.key} matches but waits: rule ${c.rule.name} cap ${c.rule.maxConcurrent} reached`); continue; }
+      // A new pickup of an issue that does not say what to change is not made: its reporter is asked.
+      if (c.pass === 1 && !c.holdsClaim && !(await this.readyToStart(c.issue, c.rule, c.key))) continue;
       if (this.dry) { this.log(`DRY would pick ${c.key} "${c.issue.title}" via rule ${c.rule.name}${c.rule.role ? ` as ${c.rule.role}` : ''}${c.pass > 1 ? ` (pass ${c.pass})` : ''}`); continue; }
       try { await this.pickUp(c.issue, c.rule, { pass: c.pass, holdsClaim: c.holdsClaim }); picked.push(c.key); }
       catch (e: any) { this.log(`pickup ${c.key} failed: ${e.message}`); }
     }
     return { scanned: issues.length, candidates: candidates.length, picked, waiting };
+  }
+
+  /**
+   * The readiness check before a new pickup (config "readiness"; see readiness.ts). True lets the
+   * pickup go ahead: the check is off, the issue is ready, or the check could not be made (it fails
+   * open). False means the issue was judged not ready: once per version of the issue (its
+   * `updatedAt`) the rule's onBlocked policy is carried out — a comment asking the reporter to say
+   * more, a notification, a move to its `state` — and after that the issue is passed over quietly
+   * until someone edits it.
+   */
+  async readyToStart(issue: any, rule: any, key: string): Promise<boolean> {
+    const config = this.cfg.readiness;
+    if (!config) return true;
+    const apiKey = this.env[READINESS_KEY_ENV];
+    if (!apiKey) { this.warnOnce('readiness:no-key', `readiness check is configured but ${READINESS_KEY_ENV} is not set (environment or .env.local); issues are picked up without it`); return true; }
+    const issueKey = issue.identifier;
+    const known = this.readinessMemo(issueKey);
+    if (known && known.updatedAt === issue.updatedAt) {
+      if (this.dry) this.log(`DRY ${issueKey} readiness (remembered): ${describeVerdict(known, config.threshold)}`);
+      return known.ready;
+    }
+    let verdict: ReadinessVerdict;
+    try {
+      const files = (this.git(['ls-files'], this.paths.repo) || '').split('\n').filter(Boolean);
+      verdict = await askReadiness({ issue, repoFiles: files, config, apiKey, fetchImpl: this.fetchImpl });
+    } catch (e: any) {
+      this.log(`${issueKey}: readiness check failed (${e.name === 'TimeoutError' ? 'timed out' : e.message}); picking it up without it`);
+      return true;
+    }
+    if (this.dry) { this.log(`DRY ${issueKey} readiness: ${describeVerdict(verdict, config.threshold)}`); return verdict.ready; }
+    this.log(`${issueKey}: readiness ${describeVerdict(verdict, config.threshold)}`);
+    const record: any = { ...verdict, updatedAt: issue.updatedAt, at: this.clock().toISOString() };
+    if (verdict.ready) { this.rememberReadiness(issueKey, record); return true; }
+    this.commit(() => { this.rememberReadiness(issueKey, record); this.emit('issue.not_ready', null, { issueKey, rule: rule.name, score: verdict.score, missing: verdict.missing }); });
+    await this.askReporter(issue, rule, verdict);
+    // What was just written on the issue changed its updatedAt. The verdict is for the issue as it
+    // now stands, so only a later edit (or a move back to the queue) asks again.
+    try { const fresh = await this.tracker.issueByKey(issueKey); if (fresh?.updatedAt) this.rememberReadiness(issueKey, { ...record, updatedAt: fresh.updatedAt }); }
+    catch { /* the next poll may ask once more; the verdict will be the same */ }
+    return false;
+  }
+
+  /** Tell the reporter the issue was not started and why, under the rule's onBlocked policy. */
+  async askReporter(issue: any, rule: any, verdict: ReadinessVerdict) {
+    const policy = rule.onBlocked || {};
+    const issueKey = issue.identifier;
+    const body = coordinator(`🛑 weawr did not start an agent on ${issueKey}: it does not say concretely enough what to change for an agent to do it without asking (readiness ${verdict.score.toFixed(2)}, needs ${this.cfg.readiness!.threshold}). What it leaves out: ${missingInWords(verdict.missing)}. Edit the issue to say it, then move it back to the queue.`);
+    const owed: Array<{ id: number | null; kind: string; data: Record<string, unknown>; runKey: string | null }> = [];
+    const add = (kind: string, data: Record<string, unknown>) => owed.push({ id: this.owe(kind, data, null), kind, data, runKey: null });
+    this.commit(() => {
+      if (policy.comment && this.tracker) add('tracker.comment', { issueId: issue.id, issueKey, body });
+      if (policy.state && this.tracker) add('tracker.setState', { issue: slimIssue(issue), state: policy.state });
+      if (policy.notify) add('herdr.notify', { title: `weawr ${issueKey}`, body: `${issueKey} not started: ${missingInWords(verdict.missing)}`.slice(0, 120), sound: 'none' });
+    });
+    await this.performOwed(owed);
+  }
+
+  /** The remembered readiness verdict for an issue: in the durable store, so a restart does not ask (or comment) again. */
+  readinessMemo(issueKey: string): (ReadinessVerdict & { updatedAt: string }) | null {
+    if (!isDurable(this.store)) return this.readinessMemory.get(issueKey) ?? null;
+    try { return JSON.parse(this.store.meta(`readiness:${issueKey}`) || 'null'); } catch { return null; }
+  }
+
+  rememberReadiness(issueKey: string, record: Record<string, unknown>) {
+    if (isDurable(this.store) && !this.store.readOnly) this.store.setMeta(`readiness:${issueKey}`, JSON.stringify(record));
+    else this.readinessMemory.set(issueKey, record);
   }
 
   warnOnce(key: string, msg: string) { (this.warned ??= new Set()); if (!this.warned.has(key)) { this.warned.add(key); this.log(msg); } }
@@ -1606,6 +1682,9 @@ export class TeamEngine {
     }
     const roles = [...new Set(this.cfg.rules.filter((r?: any) => r.enabled !== false && r.role).map((r?: any) => r.role))];
     this.log(`  guards: claim label ${this.cfg.defaults.claimLabel || 'off'}${roles.length ? ` scoped to role(s) ${roles.join(', ')}` : ''}, skip issues assigned to others: ${this.cfg.defaults.skipIfAssignedToOthers ? 'on' : 'off'}; caps: ${this.cfg.maxConcurrent} total`);
+    const readiness = this.cfg.readiness;
+    if (readiness && !this.env[READINESS_KEY_ENV]) this.warnOnce('readiness:no-key', `  readiness check: configured, but ${READINESS_KEY_ENV} is not set (environment or .env.local); issues are picked up without it`);
+    else if (readiness) this.log(`  readiness check: ${readiness.model}, pick up at ${readiness.threshold} or above`);
     if (this.cfg.localOverrides.length) this.log(`  overrides from ${path.basename(this.paths.localConfigPath)}: ${this.cfg.localOverrides.join(', ')}`);
   }
 

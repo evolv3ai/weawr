@@ -120,6 +120,9 @@ The same fields work on every tracker; what they map to on GitHub is in
   "maxNudges": 6,             // how many times, per issue, the roles may hand work to each other (a result's
                               // "nudge" gives another role its next turn) before a person is asked in. 0 turns
                               // it off. See Roles, "Working together"
+  "readiness": null,          // before a new pickup, ask whether the issue says what to change, e.g.
+                              // { "threshold": 0.5, "model": "jev-latest" }. null (or absent) = off. See
+                              // "Checking an issue is ready" below
   "defaults": {               // every rule inherits these
     "worktree": "self",       // who creates the git worktree the run works in.
                               // "self":  weawr does, with one `git worktree add` on the branch below.
@@ -182,6 +185,38 @@ The same fields work on every tracker; what they map to on GitHub is in
 
 The repository is always the one you run `weawr` in (its git top level); rules do not name
 a repo.
+
+## Checking an issue is ready
+
+An agent given an issue that cannot be done as written ("Rename the thing to the new name") spends
+a whole session finding that out and comes back `needs_human`. With `readiness` set, the watcher
+first asks TypeSafe's Jev model whether the issue is self-contained: whether a developer with only
+the issue text and the repository's file list could do it without asking anyone.
+
+```jsonc
+"readiness": {
+  "threshold": 0.5,       // pick up only when the self-contained score (0–1) is at least this; default 0.5
+  "model": "jev-latest"   // default
+}
+```
+
+The key is `TYPESAFE_API_KEY`, from the environment or the repository's `.env.local` / `.env`.
+With `readiness` set and no key, the watcher says so once and picks issues up as before.
+
+The check runs after a rule matches and before the claim, for a new pickup only; later turns and
+nudged turns of an issue already being worked are not asked about. A ready issue goes on exactly
+as without the check. An issue that is not ready is not claimed and nothing is started. Instead,
+under the rule's `onBlocked` policy, it gets one comment saying that weawr did not start an agent,
+what the issue leaves out (a value, name or format it refers to; which files are affected; how
+to tell when it is done), and to edit the issue and move it back to the queue. It is moved to
+`onBlocked.state` when that is set, and you are notified when `onBlocked.notify` is on.
+
+The verdict is remembered per issue, with the issue's `updatedAt`, in the team's store. An issue
+nobody has touched is not asked about or commented on again, restarts included. An edited issue
+moved back to the queue has a new `updatedAt` and gets a fresh verdict. When the call fails (an
+HTTP error, no answer within 10 seconds, a response without a score), the failure is logged and
+the issue is picked up as before. `weawr dry-run` shows each verdict (ready or not, the score and
+what is missing) and posts nothing.
 
 ## Prompt templates
 
