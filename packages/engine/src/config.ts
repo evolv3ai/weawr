@@ -12,6 +12,8 @@ import { LATEST_REVISION, validateTemplate } from '@weawr/recipes';
 import type { TeamPaths } from './paths.js';
 import { EMPTY_REGISTRY } from './plugins.js';
 import type { PluginRegistry, PluginSpec } from './plugins.js';
+import { normalizeReadiness } from './readiness.js';
+import type { ReadinessConfig } from './readiness.js';
 
 export type EventPolicy = Record<string, any>;
 
@@ -56,6 +58,8 @@ export interface TeamConfig {
   baseBranch: string | null;
   pullBase: boolean;
   maxNudges: number;
+  /** Ask TypeSafe's Jev whether an issue is ready before a new pickup; null (off) unless configured. See readiness.ts. */
+  readiness: ReadinessConfig | null;
   defaults: Record<string, any>;
   rules: Rule[];
   localOverrides: string[];
@@ -87,6 +91,9 @@ export const DEFAULTS = {
   mergeLabel: 'auto-merge',
   // How `weawr merge` merges: "squash" | "merge" | "rebase". Repository protections still apply.
   mergeMethod: 'squash',
+  // Before a new pickup, ask TypeSafe's Jev whether the issue says concretely enough what to change:
+  // { "threshold": 0.5, "model": "jev-latest" }. null is off. The key is TYPESAFE_API_KEY.
+  readiness: null as Record<string, unknown> | null,
   defaults: {
     worktree: 'self',                 // who creates the worktree: "self" (weawr), "herdr", or "none" (run in this checkout)
     worktreeDir: '.weawr/worktrees',  // where "self" puts them, relative to the repo (gitignored)
@@ -186,6 +193,7 @@ export function loadConfig(sources: ConfigSources): TeamConfig {
   cfg.localOverrides = overridePaths(local);
   cfg.name = String(cfg.name || path.basename(paths.repo)).trim() || 'weawr';
   cfg.maxNudges = normalizeMaxNudges(cfg.maxNudges, path.relative(paths.repo, paths.configPath));
+  cfg.readiness = normalizeReadiness(cfg.readiness);
   const plugins = sources.plugins ?? EMPTY_REGISTRY;
   cfg.trackerSpec = trackerSpec(cfg.tracker);
   // A tracker from a plugin, else a built-in one; an id nobody provides names the plugin problem when there is one.
