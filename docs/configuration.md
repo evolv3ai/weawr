@@ -224,3 +224,17 @@ and `role` compose: a `review` rule on `herdr-mbp` claims with `herdr-mbp:review
 `state` values in `onPickup`/`onDone` are matched against the team's workflow by name, then by
 type, so `"started"` works for any team. Set a key to `null`/`false` to skip that step.
 
+`onBlocked` and `onIdle` take a `state` too, off by default. With it set, an issue whose agent is
+waiting on a person moves there. That covers a permission dialog, a brief it would not take, a
+question asked in chat, or a `needs_human` result (which uses `onIdle.state`). When the agent works
+again the issue goes back to `onPickup.state`. Point both at one status to get a single
+"needs input" column:
+
+```jsonc
+"onBlocked": { "comment": true, "notify": true, "state": "Agent Needs Input" },
+"onIdle":    { "comment": true, "notify": true, "state": "Agent Needs Input" }
+```
+
+A `needs_human` result ends the run, so an answer given afterwards starts nothing by itself. Answer
+in the agent's workspace. For a fresh turn instead, remove the claim label and run `weawr reset <key>`.
+

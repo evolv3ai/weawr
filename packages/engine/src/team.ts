@@ -765,10 +765,12 @@ export class TeamEngine {
       if (!sent) {
         run.notified.blocked = true; this.saveState();
         await this.report(key, rule, rule.onBlocked, coordinator(`✋ the \`${rule.role || rule.name}\` agent for ${key} is not taking input yet — answer whatever it is showing in herdr workspace \`${run.workspaceId}\` and weawr will send it the brief.${await this.tail(run.agentName, 12)}`), 'request');
+        await this.markWaiting(key, run, rule.onBlocked);
       }
       const owed: Array<{ id: number | null; kind: string; data: Record<string, unknown>; runKey: string | null }> = [];
       if (this.tracker && rule.onPickup.assignToMe) owed.push({ id: this.owe('tracker.assign', { issue: slimIssue(issue) }, key), kind: 'tracker.assign', data: { issue: slimIssue(issue) }, runKey: key });
-      if (this.tracker && rule.onPickup.state) owed.push({ id: this.owe('tracker.setState', { issue: slimIssue(issue), state: rule.onPickup.state }, key), kind: 'tracker.setState', data: { issue: slimIssue(issue), state: rule.onPickup.state }, runKey: key });
+      // An issue just moved to the waiting state stays there; markWorking() gives it the pickup state once the brief is taken.
+      if (this.tracker && rule.onPickup.state && !run.waitingOnPerson) owed.push({ id: this.owe('tracker.setState', { issue: slimIssue(issue), state: rule.onPickup.state }, key), kind: 'tracker.setState', data: { issue: slimIssue(issue), state: rule.onPickup.state }, runKey: key });
       await this.performOwed(owed);
 
       this.supervise(key);
@@ -990,7 +992,7 @@ export class TeamEngine {
     const name = run.agentName;
     while (run.status === 'running') {
       // A brief herdr would not take at pickup is owed to the agent; give it the moment it will.
-      if (run.pendingPrompt && await this.deliverPrompt(key, run)) run.notified.blocked = false;
+      if (run.pendingPrompt && await this.deliverPrompt(key, run)) { run.notified.blocked = false; await this.markWorking(key, run, rule); }
       // Bounded, not "until it settles": a result is read on every turn of this loop, so an agent
       // that writes result.json and keeps working — the implementer the issue let merge, waiting
       // for the reviewers' verdicts — is finalized within a minute rather than when it finally
@@ -1020,11 +1022,14 @@ export class TeamEngine {
           run.notified.blocked = true; this.saveState();
           const tail = await this.tail(name, 12);
           await this.report(key, rule, rule.onBlocked, coordinator(`✋ the \`${rule.role || rule.name}\` agent for ${key} is waiting for approval or input in herdr workspace \`${run.workspaceId}\`.${tail}`), 'request');
+          await this.markWaiting(key, run, rule.onBlocked);
         }
         const next = await this.herdr.waitAgent(name, { until: ['working', 'idle', 'done'], timeoutMs: 6 * 3600e3 });
         this.log(`${key}: unblocked → ${next}`);
         this.emit('run.working', key, { after: 'blocked' });
         run.notified.blocked = false;
+        // Idle or done after a dialog goes round again: a result finalizes it, a question keeps it waiting.
+        if (next === 'working') await this.markWorking(key, run, rule);
         continue;
       }
       if (st === 'idle' || st === 'done' || st === 'unknown') {
@@ -1038,11 +1043,13 @@ export class TeamEngine {
           run.notified.idle = true; this.saveState();
           const tail = await this.tail(name, 15);
           await this.report(key, rule, rule.onIdle, coordinator(`💬 the \`${rule.role || rule.name}\` agent for ${key} stopped without a result and is probably asking a question. Answer it in herdr workspace \`${run.workspaceId}\`.${tail}`), 'request');
+          await this.markWaiting(key, run, rule.onIdle);
         }
         await this.herdr.waitAgent(name, { until: ['working'], timeoutMs: 6 * 3600e3 });
         this.log(`${key}: working again`);
         this.emit('run.working', key, { after: 'question' });
         run.notified.idle = false;
+        await this.markWorking(key, run, rule);
         continue;
       }
       this.log(`${key}: unexpected wait result ${st}; retrying in 30s`);
@@ -1106,10 +1113,13 @@ export class TeamEngine {
     await this.report(key, rule, rule.onDone, lines.join('\n'), 'done');
     await this.carryOutNudges(key, run, rule, relay);
     const owed: Array<{ id: number | null; kind: string; data: Record<string, unknown>; runKey: string | null }> = [];
-    if (this.tracker && rule.onDone.state && status === 'pr_open') {
-      const data = { issue: { ...slimIssue(readJson(path.join(run.archiveDir, 'issue.json'), {})), id: run.issueId }, state: rule.onDone.state };
+    // pr_open goes to review; needs_human is a question put in writing, so it waits where an agent asking in chat would.
+    const doneState = status === 'pr_open' ? rule.onDone.state : status === 'needs_human' ? rule.onIdle?.state : null;
+    if (this.tracker && doneState) {
+      const data = { issue: { ...slimIssue(readJson(path.join(run.archiveDir, 'issue.json'), {})), id: run.issueId }, state: doneState };
       owed.push({ id: this.owe('tracker.setState', data, key), kind: 'tracker.setState', data, runKey: key });
     }
+    run.waitingOnPerson = null;
     if (rule.onDone.closeWorkspace && run.workspaceId) { const data = { workspaceId: run.workspaceId, owner: workspaceOwner(run, this.paths.repo) }; owed.push({ id: this.owe('herdr.closeWorkspace', data, key), kind: 'herdr.closeWorkspace', data, runKey: key }); }
     if (watch) {
       run.prUrl = watch; run.status = 'awaiting_merge';
@@ -1463,6 +1473,32 @@ export class TeamEngine {
       if (policy?.notify) { const data = { title: `weawr ${key}`, body: body.split('\n')[0].replace(/[*`]/g, '').slice(0, 120), sound }; owed.push({ id: this.owe('herdr.notify', data, key), kind: 'herdr.notify', data, runKey: key }); }
       this.emit('run.reported', key, { comment: !!(policy?.comment && this.tracker), notify: !!policy?.notify, firstLine: body.split('\n')[0].slice(0, 200) });
     });
+    await this.performOwed(owed);
+  }
+
+  /**
+   * The issue now waits on a person — a dialog, or a question in chat: move it to the policy's
+   * `state` (e.g. "Needs Input"), when it has one. `run.waitingOnPerson` records the move, so it is
+   * made once per wait and only an issue weawr moved is moved back.
+   */
+  async markWaiting(key: string, run: any, policy: any) {
+    if (!this.tracker || !policy?.state || run.waitingOnPerson === policy.state) return;
+    run.waitingOnPerson = policy.state;
+    await this.moveIssue(key, run, policy.state);
+  }
+
+  /** The agent is working again after a wait: the issue goes back to the pickup state. */
+  async markWorking(key: string, run: any, rule: any) {
+    if (!run.waitingOnPerson) return;
+    run.waitingOnPerson = null;
+    if (this.tracker && rule.onPickup?.state) await this.moveIssue(key, run, rule.onPickup.state);
+    else this.saveState();
+  }
+
+  async moveIssue(key: string, run: any, state: string) {
+    const data = { issue: { ...slimIssue(readJson(path.join(run.archiveDir, 'issue.json'), {})), id: run.issueId }, state };
+    const owed = [{ id: this.owe('tracker.setState', data, key), kind: 'tracker.setState', data, runKey: key }];
+    this.saveState();
     await this.performOwed(owed);
   }
 
