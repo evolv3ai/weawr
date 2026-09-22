@@ -2,7 +2,9 @@
 // TypeSafe's Jev through a fake fetch and, when it answers the question (or the call fails), typed
 // into the agent's pane and noted on the issue. weawr's own comments, comments from before the
 // question and comments already looked at are left alone, restarts included; a run behind a dialog
-// is never typed into; no config means no calls, and no key means one warning and no relay.
+// is never typed into; no config means no calls, and no key means one warning and no relay. An agent
+// behind Claude Code's question dialog is answered in the dialog: the option the comment picks is
+// pressed, or the comment is typed into "Type something.".
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -28,13 +30,13 @@ const comment = (min, body, author = 'Ada') => ({ body, createdAt: at(min), auth
 
 const made = [];
 process.on('exit', () => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
-function repo(relayReplies = { threshold: 0.5, model: 'jev-latest' }) {
+function repo(relayReplies = { threshold: 0.5, model: 'jev-latest' }, defaults = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'weawr-relay-')));
   execFileSync('git', ['init', '-q', dir]);
   fs.mkdirSync(path.join(dir, '.weawr'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.weawr', 'config.json'), JSON.stringify({
     tracker: 'linear', ...(relayReplies ? { relayReplies } : {}),
-    defaults: { worktree: 'none', onPickup: { comment: false, state: 'Agent Working' }, onDone: { comment: false, notify: false }, onBlocked: { comment: false, notify: false }, onIdle: { comment: true, notify: false, state: 'Agent Needs Input' }, onMerged: null },
+    defaults: { worktree: 'none', onPickup: { comment: false, state: 'Agent Working' }, onDone: { comment: false, notify: false }, onBlocked: { comment: false, notify: false }, onIdle: { comment: true, notify: false, state: 'Agent Needs Input' }, onMerged: null, ...defaults },
     rules: [{ name: 'r', match: 'any:true' }],
   }));
   made.push(dir);
@@ -42,10 +44,12 @@ function repo(relayReplies = { threshold: 0.5, model: 'jev-latest' }) {
 }
 function fakeHerdr(dir, { waits = [], pane = QUESTION } = {}) {
   const h = {
-    prompts: [],
+    prompts: [], keys: [],
+    async sendKeys(paneId, ...keys) { h.keys.push({ paneId, keys }); },
+    async sendText(paneId, text) { h.keys.push({ paneId, text }); },
     async agentGet(name) { return { agent: 'claude', name, agent_status: 'idle', cwd: dir, pane_id: 'p1', tab_id: 't1', workspace_id: 'w1' }; },
     async prompt(name, text) { h.prompts.push({ name, text }); },
-    async readAgent() { return pane; }, async notify() {}, async closeWorkspace() {},
+    async readAgent() { return typeof pane === 'function' ? pane() : pane; }, async notify() {}, async closeWorkspace() {},
     waitAgent() { return waits.length ? Promise.resolve(waits.shift()) : new Promise(() => {}); },
   };
   return h;
@@ -87,9 +91,9 @@ function engine(dir, { herdr, tracker, fetchImpl, env = { TYPESAFE_API_KEY: 'tes
   const cfg = loadConfig({ paths, promptsRoot: PROMPTS });
   return new TeamEngine({ cfg, tracker, herdr, paths, promptsRoot: PROMPTS, store, ids: { hostId: 'h', teamId: 'fac0001' }, log: (l) => logs.push(l), fetchImpl, env, clock: () => new Date(at(30)) });
 }
-function setup({ comments = [], script = [], run = {}, relayReplies, env, logs } = {}) {
+function setup({ comments = [], script = [], run = {}, relayReplies, env, logs, pane } = {}) {
   const dir = repo(relayReplies);
-  const herdr = fakeHerdr(dir);
+  const herdr = fakeHerdr(dir, pane === undefined ? {} : { pane });
   const tracker = fakeTracker(comments);
   const fetchImpl = fakeFetch(script);
   const e = engine(dir, { herdr, tracker, fetchImpl, env, logs, run: waitingRun(dir, run) });
@@ -249,4 +253,133 @@ test('no key: one warning, however many polls, and nothing relayed', async () =>
   assert.equal(fetchImpl.calls.length, 0);
   assert.equal(herdr.prompts.length, 0);
   assert.equal(logs.filter((l) => /reply relay is configured but TYPESAFE_API_KEY is not set/.test(l)).length, 1);
+});
+
+// --- Question dialogs ---------------------------------------------------------------------------
+
+const DIALOG_PANE = [
+  ' ☐ Tagline',
+  'WTR-12: Which tagline should go on the line after the title in README.md?',
+  '❯ 1. (A) Scratch repo',
+  '     "A scratch repo for trying weawr."',
+  '  2. (B) Trial issues',
+  '     "Where weawr runs its trial issues."',
+  '  3. Type something.',
+  '────────────────',
+  '  4. Chat about this',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+const NO_TYPE_PANE = DIALOG_PANE.replace('  3. Type something.\n', '').replace('4. Chat', '3. Chat');
+const DIALOG = {
+  header: 'Tagline',
+  question: 'WTR-12: Which tagline should go on the line after the title in README.md?',
+  options: [
+    { n: 1, label: '(A) Scratch repo', description: '"A scratch repo for trying weawr."' },
+    { n: 2, label: '(B) Trial issues', description: '"Where weawr runs its trial issues."' },
+  ],
+  typeOption: 3,
+};
+const PICK = (choice, confidence) => ({ answers: { pick: { choice, confidence } } });
+/** A run blocked on the dialog, reported at ASKED_AT. */
+/** Blocked reports on, as a dialog is reported under onBlocked. */
+const reportsBlocked = () => repo(undefined, { onBlocked: { comment: true, notify: false, state: 'Agent Needs Input' } });
+const onDialog = (dialog = DIALOG) => ({ notified: { blocked: true }, idleKind: undefined, askedTail: undefined, askedDialog: dialog, waitingOnPerson: 'Agent Needs Input' });
+
+test('the blocked report on a question dialog lists the options and asks for a reply on the issue', async () => {
+  const dir = reportsBlocked();
+  const herdr = fakeHerdr(dir, { waits: ['blocked'], pane: DIALOG_PANE });
+  const tracker = fakeTracker();
+  const e = engine(dir, { herdr, tracker, fetchImpl: fakeFetch(), run: waitingRun(dir, { notified: {}, idleKind: undefined, askedAt: undefined, askedTail: undefined, waitingOnPerson: undefined }) });
+  e.supervise('GH-7');
+  await new Promise((r) => setTimeout(r, 50));
+  const run = e.state.runs['GH-7'];
+  assert.deepEqual(run.askedDialog, DIALOG);
+  assert.equal(run.askedAt, at(30));
+  assert.equal(tracker.comments.length, 1);
+  const body = tracker.comments[0];
+  assert.match(body, /is asking a question in herdr workspace `w1`/);
+  assert.match(body, /Which tagline should go on the line after the title/);
+  assert.match(body, /1\. \*\*\(A\) Scratch repo\*\* — "A scratch repo for trying weawr\."/);
+  assert.match(body, /2\. \*\*\(B\) Trial issues\*\* — "Where weawr runs its trial issues\."/);
+  assert.match(body, /Reply on this issue with your choice\./);
+  assert.doesNotMatch(body, /waiting for approval or input/);
+});
+
+test('a permission prompt keeps its report, and is never typed into', async () => {
+  const prompt = ' Do you want to proceed?\n ❯ 1. Yes\n   2. No, and tell Claude what to do differently (esc)\n\n Esc to cancel · Tab to amend';
+  const dir = reportsBlocked();
+  const herdr = fakeHerdr(dir, { waits: ['blocked'], pane: prompt });
+  const tracker = fakeTracker([comment(40, 'Yes, go ahead.')]);
+  const fetchImpl = fakeFetch();
+  const e = engine(dir, { herdr, tracker, fetchImpl, run: waitingRun(dir, { notified: {}, idleKind: undefined, askedTail: undefined, waitingOnPerson: undefined }) });
+  e.supervise('GH-7');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(e.state.runs['GH-7'].askedDialog, null);
+  assert.match(tracker.comments[0], /is waiting for approval or input in herdr workspace `w1`/);
+  await e.pollOnce();
+  assert.equal(fetchImpl.calls.length, 0);
+  assert.equal(herdr.keys.length, 0);
+  assert.equal(herdr.prompts.length, 0);
+});
+
+test('a reply naming B presses 2, and the issue says which option', async () => {
+  const { e, herdr, tracker, fetchImpl } = setup({ comments: [comment(5, 'B please')], script: [PICK('2', 0.91)], run: onDialog(), pane: DIALOG_PANE });
+  await e.pollOnce();
+  assert.equal(fetchImpl.calls.length, 1);
+  const { body } = fetchImpl.calls[0];
+  assert.equal(body.questions.pick.type, 'choice');
+  assert.deepEqual(Object.keys(body.questions.pick.criteria), ['1', '2', 'none']);
+  assert.match(body.questions.pick.criteria['2'], /\(B\) Trial issues: "Where weawr runs its trial issues\."/);
+  assert.deepEqual(body.state, { question: DIALOG.question, comment: 'B please' });
+  assert.deepEqual(herdr.keys, [{ paneId: 'p1', keys: ['2'] }]);
+  assert.equal(herdr.prompts.length, 0, 'nothing is prompted into a dialog');
+  assert.equal(tracker.comments.length, 1);
+  assert.match(tracker.comments[0], /↪️ \*\*Weawr Coordinator\*\* — relayed Ada's answer \(\(B\) Trial issues\) to the agent in workspace `w1`/);
+  assert.equal(e.state.runs['GH-7'].relayedUpTo, at(5));
+});
+
+test('a free-text reply picks the type option and types the text in', async () => {
+  const { e, herdr, tracker } = setup({ comments: [comment(5, 'Neither — use\n"weawr\'s sandbox".')], script: [PICK('none', 0.88)], run: onDialog(), pane: DIALOG_PANE });
+  await e.pollOnce();
+  assert.deepEqual(herdr.keys, [{ paneId: 'p1', keys: ['3'] }, { paneId: 'p1', text: 'Neither — use "weawr\'s sandbox".' }, { paneId: 'p1', keys: ['Enter'] }]);
+  assert.match(tracker.comments[0], /relayed Ada's answer \(typed in\)/);
+});
+
+test('a low-confidence pick with a type option is typed in; a failed call too', async () => {
+  for (const answer of [PICK('1', 0.2), 503]) {
+    const { e, herdr } = setup({ comments: [comment(5, 'maybe A?')], script: [answer], run: onDialog(), pane: DIALOG_PANE });
+    await e.pollOnce();
+    assert.deepEqual(herdr.keys.map((k) => k.keys?.[0] ?? k.text), ['3', 'maybe A?', 'Enter']);
+  }
+});
+
+test('a low-confidence reply with no type option is left alone, and not asked about again', async () => {
+  const logs = [];
+  const dialog = { ...DIALOG, typeOption: null };
+  const { e, herdr, tracker, fetchImpl } = setup({ comments: [comment(5, 'hmm, not sure')], script: [PICK('1', 0.3)], run: onDialog(dialog), pane: NO_TYPE_PANE, logs });
+  await e.pollOnce();
+  await e.pollOnce();
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.equal(herdr.keys.length, 0);
+  assert.equal(tracker.comments.length, 0);
+  assert.ok(logs.some((l) => /takes no text; left for a person/.test(l)));
+  assert.equal(e.state.runs['GH-7'].relayedUpTo, at(5));
+});
+
+test('a dialog that changed before the relay is not typed into', async () => {
+  const logs = [];
+  const other = DIALOG_PANE.replace('Which tagline should go on the line after the title in README.md?', 'Which licence?');
+  const { e, herdr, tracker } = setup({ comments: [comment(5, 'B')], script: [PICK('2', 0.95)], run: onDialog(), pane: other, logs });
+  await e.pollOnce();
+  assert.equal(herdr.keys.length, 0);
+  assert.equal(tracker.comments.length, 0);
+  assert.ok(logs.some((l) => /no longer on the pane/.test(l)));
+});
+
+test('one answer per dialog: a second comment waits for the next one', async () => {
+  const { e, herdr, fetchImpl } = setup({ comments: [comment(5, 'A'), comment(6, 'actually B')], script: [PICK('1', 0.9), PICK('2', 0.9)], run: onDialog(), pane: DIALOG_PANE });
+  await e.pollOnce();
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.deepEqual(herdr.keys, [{ paneId: 'p1', keys: ['1'] }]);
+  assert.equal(e.state.runs['GH-7'].relayedUpTo, at(5));
 });

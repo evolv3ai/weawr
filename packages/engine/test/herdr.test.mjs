@@ -308,3 +308,16 @@ test('closeWorkspaceOf closes the run\'s own workspace and leaves a stranger und
   const s4 = scriptedHerdr({ 'workspace get': ws('GH-69 impl Rename project to weawr'), 'workspace close': err('workspace_busy', 'nope') });
   await assert.rejects(new Herdr({ bin: s4.bin }).closeWorkspaceOf('w3J', { label: 'GH-69 impl Rename project to weawr' }), /nope/);
 });
+
+test('sendKeys and sendText drive the pane through herdr pane send-keys / send-text', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-keys-'));
+  const bin = path.join(dir, 'herdr');
+  fs.writeFileSync(bin, `#!/bin/sh\nfor a in "$@"; do printf '%s|' "$a"; done >> "${dir}/calls"; echo >> "${dir}/calls"\nprintf '%s' '{"result":{}}'\n`, { mode: 0o755 });
+  const h = new Herdr({ bin });
+  await h.sendKeys('p1', '3');
+  await h.sendText('p1', 'use "the sandbox"');
+  await h.sendKeys('p1', 'Enter');
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'calls'), 'utf8').trim().split('\n'), [
+    'pane|send-keys|p1|3|', 'pane|send-text|p1|use "the sandbox"|', 'pane|send-keys|p1|Enter|',
+  ]);
+});
