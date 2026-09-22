@@ -32,6 +32,32 @@ test('the dialog seen on WTR-12 parses: header, question, options with descripti
   });
 });
 
+test('a question that wraps over several "│" lines, as seen on WTR-22, is joined without the border', () => {
+  const pane = [
+    ' ☐ Licence',
+    '│ WTR-22: which Licence line should go at the end of README.md? (The issue text calls it a "Status" line, but both',
+    '│ options are Licence lines. Whichever you pick goes on its own new line after the existing Status line.)',
+    '❯ 1. (A) Licence: MIT.',
+    '     Appends the line "Licence: MIT."',
+    '  2. (B) All rights reserved',
+    '     Appends the line "Licence: none yet, all rights reserved."',
+    '  3. Type something.',
+    '─'.repeat(120),
+    '  4. Chat about this',
+    'Enter to select · ↑/↓ to navigate · Esc to cancel',
+  ].join('\n');
+  assert.deepEqual(parseQuestionDialog(pane), {
+    header: 'Licence',
+    question: 'WTR-22: which Licence line should go at the end of README.md? (The issue text calls it a "Status" line, but both '
+      + 'options are Licence lines. Whichever you pick goes on its own new line after the existing Status line.)',
+    options: [
+      { n: 1, label: '(A) Licence: MIT.', description: 'Appends the line "Licence: MIT."' },
+      { n: 2, label: '(B) All rights reserved', description: 'Appends the line "Licence: none yet, all rights reserved."' },
+    ],
+    typeOption: 3,
+  });
+});
+
 test('a permission prompt is not a question dialog', () => {
   const pane = [
     ' Bash command',
