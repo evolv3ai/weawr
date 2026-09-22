@@ -71,6 +71,11 @@ export const commandSchemas = {
   'run.tail': s.object({ team: key, run: key, lines: s.maybe(s.number({ integer: true, min: 1, max: 2000 })) }, { extra: 'refuse' }),
   /** Bring the run's pane to the front of herdr on this machine. Answered by the host, from loopback only. */
   'run.focus': s.object({ team: key, run: key }, { extra: 'refuse' }),
+  /**
+   * Answer the run's question dialog: press `option` (its number as the dialog shows it), or type
+   * `text` into its "Type something." option. Nothing is typed when the dialog on the pane changed.
+   */
+  'run.answer': s.object({ team: key, run: key, option: s.maybe(s.number({ integer: true, min: 1, max: 99 })), text: s.maybe(s.string({ min: 1, max: 4000 })), requestId }, { extra: 'refuse' }),
   'team.tidy': s.object({ team: s.maybe(key), requestId }, { extra: 'refuse' }),
 } as const;
 export type ClientCommandName = keyof typeof commandSchemas;

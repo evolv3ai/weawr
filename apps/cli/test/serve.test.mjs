@@ -36,11 +36,16 @@ function repo(t, name, runs) {
 }
 const RUN = (dir, key, over = {}) => ({ rule: 'impl', role: 'impl', pass: 1, status: 'done', issueKey: key.split('@')[0], title: `Task ${key}`, url: 'https://x/1', startedAt: '2026-09-08T10:00:00Z', finishedAt: '2026-09-08T11:00:00Z', agentName: `${key.toLowerCase().replace('@', '-')}`, workspaceId: 'w1', notified: {}, worktree: 'none', workDir: dir, result: { status: 'pr_open', prUrl: 'https://github.com/o/r/pull/1' }, ...over });
 
-/** An owner process: real engine, durable store, a fake herdr whose agents are all up. */
-function owner(t, dir, teamId) {
+/**
+ * An owner process: real engine, durable store, a fake herdr whose agents are all up. Keys and text
+ * sent to a pane go to `<dir>/herdr-keys.jsonl`; a pane shows `<dir>/pane.txt` when there is one;
+ * with `tracker`, comments go to `<dir>/comments.jsonl`.
+ */
+function owner(t, dir, teamId, { tracker = false } = {}) {
   const child = spawn(process.execPath, ['--input-type=module', '-e', `
     import { acquireOwnership, teamPaths, loadConfig, TeamEngine, createApplication, openOwnerStore } from ${JSON.stringify(ENGINE)};
     import { serveIpc } from ${JSON.stringify(IPC)};
+    import fs from 'node:fs';
     const paths = teamPaths(${JSON.stringify(dir)});
     const r = acquireOwnership({ lockPath: paths.lockPath, ownerPath: paths.ownerPath, card: { teamId: ${JSON.stringify(teamId)}, hostId: 'h', startedAt: 'now', version: 'test', socketPath: paths.socketPath } });
     if (!r.ok) { process.stdout.write('busy\\n'); process.exit(2); }
@@ -49,9 +54,13 @@ function owner(t, dir, teamId) {
       async run(args) { if (args[0] === 'api') return { result: { snapshot: { version: '9', agents: [{ name: 'gh-1-impl', agent_status: 'idle', workspace_id: 'w1' }].filter((a) => !stopped.has(a.name)), workspaces: [{ workspace_id: 'w1', label: 'x' }], panes: [] } } }; return {}; },
       async agentGet(n) { return stopped.has(n) ? null : { name: n, agent_status: 'idle', workspace_id: 'w1' }; },
       async stopAgent(n) { stopped.add(n); return 'exited'; },
-      async closeWorkspace() {}, async closeWorkspaceOf() { return 'closed'; }, async workspaceGet() { return null; }, async readAgent() { return 'screen text'; }, async notify() {}, async prompt() {},
+      async closeWorkspace() {}, async closeWorkspaceOf() { return 'closed'; }, async workspaceGet() { return null; }, async notify() {}, async prompt() {},
+      async readAgent() { try { return fs.readFileSync(${JSON.stringify(path.join(dir, 'pane.txt'))}, 'utf8'); } catch { return 'screen text'; } },
+      async sendKeys(paneId, ...keys) { fs.appendFileSync(${JSON.stringify(path.join(dir, 'herdr-keys.jsonl'))}, JSON.stringify({ paneId, keys }) + '\\n'); },
+      async sendText(paneId, text) { fs.appendFileSync(${JSON.stringify(path.join(dir, 'herdr-keys.jsonl'))}, JSON.stringify({ paneId, text }) + '\\n'); },
     };
-    const engine = new TeamEngine({ cfg: loadConfig({ paths, promptsRoot: ${JSON.stringify(PROMPTS)} }), tracker: null, herdr, paths, promptsRoot: ${JSON.stringify(PROMPTS)}, store: openOwnerStore(paths), ids: { hostId: 'h', teamId: ${JSON.stringify(teamId)} }, log: () => {}, version: 'test' });
+    const tracker = ${tracker ? 'true' : 'false'} ? { async comment(id, body) { fs.appendFileSync(${JSON.stringify(path.join(dir, 'comments.jsonl'))}, JSON.stringify(body) + '\\n'); } } : null;
+    const engine = new TeamEngine({ cfg: loadConfig({ paths, promptsRoot: ${JSON.stringify(PROMPTS)} }), tracker, herdr, paths, promptsRoot: ${JSON.stringify(PROMPTS)}, store: openOwnerStore(paths), ids: { hostId: 'h', teamId: ${JSON.stringify(teamId)} }, log: () => {}, version: 'test' });
     await serveIpc(createApplication(engine), paths.socketPath);
     process.stdout.write('ready\\n');
     setInterval(() => {}, 1000);
@@ -267,4 +276,63 @@ test('serve: a focus falls back to the workspace when the run\'s agent is not in
   assert.equal(await herdr.focusWorkspaceOf('w1', { label: 'GH-1 impl', agentName: 'gh-1-impl' }), 'focused the workspace');
   assert.match(await herdr.focusWorkspaceOf('w2', { label: 'GH-2 impl' }), /was reused by herdr for "someone else"/);
   assert.deepEqual(calls.filter((a) => a.includes('focus')), [['workspace', 'focus', 'w1']]);
+});
+
+const DIALOG_PANE = [
+  ' ☐ Tagline',
+  'Which tagline should go under the title?',
+  '❯ 1. Scratch repo',
+  '     "A scratch repo for trying weawr."',
+  '  2. Trial issues',
+  '  3. Type something.',
+  '────────────────',
+  '  4. Chat about this',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+const DIALOG = { header: 'Tagline', question: 'Which tagline should go under the title?', options: [{ n: 1, label: 'Scratch repo', description: '"A scratch repo for trying weawr."' }, { n: 2, label: 'Trial issues', description: '' }], typeOption: 3 };
+
+test('serve: run.answer presses the option the console picked, types free text into the type option, and sends nothing to a dialog that changed', async (t) => {
+  const blocked = { status: 'running', finishedAt: null, result: null, agentName: 'gh-1-impl', paneId: 'p1', notified: { blocked: true }, askedDialog: DIALOG, askedAt: '2026-09-08T10:30:00Z' };
+  const dir = repo(t, 'answer', { 'GH-1@impl': RUN('', 'GH-1@impl', blocked), 'GH-2@impl': RUN('', 'GH-2@impl', { status: 'running', finishedAt: null, result: null }) });
+  fs.writeFileSync(path.join(dir, 'pane.txt'), DIALOG_PANE);
+  await owner(t, dir, 'fans', { tracker: true });
+  const h = await host(t);
+  h.reg('fans', dir);
+  const runs = await until(async () => { const s = (await fetch(`${h.url}/api/v1/snapshot`).then(j)).result; return s.teams[0]?.issues.flatMap((i) => i.runs); });
+  const byKey = Object.fromEntries(runs.map((r) => [r.key, r]));
+  assert.deepEqual(byKey['GH-1@impl'].dialog, DIALOG, 'the console sees the question and its options');
+  assert.equal(byKey['GH-2@impl'].dialog, null);
+  const keys = () => { try { return fs.readFileSync(path.join(dir, 'herdr-keys.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+  const comments = () => { try { return fs.readFileSync(path.join(dir, 'comments.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+  let n = 0;
+  const post = (body) => fetch(`${h.url}/api/v1/commands/run.answer`, { method: 'POST', headers: { 'content-type': 'application/json', origin: h.url }, body: JSON.stringify({ team: 'fans', run: 'GH-1@impl', requestId: `r${++n}`, ...body }) }).then(j);
+
+  // An option: that digit, and the issue is told the console answered.
+  const pressed = await post({ option: 2 });
+  assert.equal(pressed.ok, true, JSON.stringify(pressed.error));
+  assert.deepEqual(pressed.result.result.label, 'Trial issues');
+  assert.equal(pressed.result.operation.status, 'completed');
+  assert.deepEqual(keys(), [{ paneId: 'p1', keys: ['2'] }]);
+  assert.equal(comments().length, 1);
+  assert.match(comments()[0], /↪️ .*relayed the console's answer \(Trial issues\) to the agent in workspace `w1`/);
+
+  // Free text: the type option, the text, Enter.
+  const typed = await post({ text: 'Neither: "the sandbox"' });
+  assert.equal(typed.ok, true, JSON.stringify(typed.error));
+  assert.deepEqual(keys().slice(1), [{ paneId: 'p1', keys: ['3'] }, { paneId: 'p1', text: 'Neither: "the sandbox"' }, { paneId: 'p1', keys: ['Enter'] }]);
+  assert.match(comments()[1], /relayed the console's answer \(typed in\)/);
+
+  // The pane now shows another question: nothing is sent, and the console is told why.
+  fs.writeFileSync(path.join(dir, 'pane.txt'), DIALOG_PANE.replace('Which tagline should go under the title?', 'Which licence?'));
+  const changed = await post({ option: 1 });
+  assert.equal(changed.ok, false); assert.equal(changed.error.code, 'conflict');
+  assert.match(changed.error.message, /changed or gone; nothing was typed in/);
+  assert.equal(keys().length, 4); assert.equal(comments().length, 2);
+
+  // Refused before the owner is asked: a run with no dialog, an unknown run, an empty answer.
+  const none = await post({ run: 'GH-2@impl', option: 1 });
+  assert.equal(none.error.code, 'conflict');
+  assert.equal((await post({ run: 'GH-9@impl', option: 1 })).error.code, 'no_such_run');
+  assert.equal((await post({})).error.code, 'bad_request');
+  assert.equal(keys().length, 4);
 });

@@ -155,6 +155,23 @@ export class TeamHub {
   }
 
   /**
+   * Answer a run's question dialog from the console: press one of its options, or type text into
+   * its "Type something." option. The owner does the pressing — the run, its pane and the tracker
+   * are its — through the same path as a reply on the issue (TeamEngine.pressDialog): the pane is
+   * read again first and nothing is typed when the dialog changed, and the issue is told, naming
+   * `by` as the one who answered. A run the snapshot shows no dialog for is refused here.
+   */
+  async answerRun(teamId: string, runKey: string, answer: { option?: number | null; text?: string | null }, { requestId, by = 'console' }: { requestId?: string; by?: string } = {}): Promise<CommandResult> {
+    const e = this.team(teamId);
+    if (!e) return { ok: false, error: { code: 'not_found', message: `no team ${teamId} on this host` } };
+    const run = e.snapshot?.issues.flatMap((i) => i.runs).find((r) => r.key === runKey);
+    if (e.snapshot && !run) return { ok: false, error: { code: 'no_such_run', message: `no run ${runKey}` } };
+    if (run && !(run as any).dialog) return { ok: false, error: { code: 'conflict', message: `${runKey} is not waiting on a question dialog` } };
+    if ((answer.option ?? null) === null && !String(answer.text ?? '').trim()) return { ok: false, error: { code: 'bad_request', message: 'name an option or give the text to type in' } };
+    return this.dispatch(teamId, { type: 'run.answer', runKey, option: answer.option ?? null, text: answer.text ?? null, requestId, by });
+  }
+
+  /**
    * A command for one team: to its owner over the private socket. With no owner, reads that
    * herdr alone can answer (a tail) are answered here; every mutation is refused as owner_offline.
    */

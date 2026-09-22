@@ -183,7 +183,7 @@ owners keep running — and starting it again restores the view. `apps/cli/src/t
 | `GET /api/v1/snapshot` | the host snapshot: every team, each the owner's snapshot or the store's last word marked `offline`/`stale` |
 | `GET /api/v1/teams`, `…/:id/snapshot`, `…/:id/tasks/:key`, `…/tasks/:key/tail`, `…/runs/:key/tail`, `…/operations/:id`, `…/events?after=` | one team's facts, always with `owner` and `freshness` |
 | `GET /api/v1/events?cursors=<teamId>:<seq>,…` | SSE: a `snapshot` whenever what is shown changed, `event`s per team in order with `id: <teamId>:<seq>`, `resnapshot` when a cursor is older than the events an owner keeps |
-| `POST /api/v1/commands/<name>` | `task.done`, `task.undo`, `task.stop`, `task.reset`, `task.tail`, `run.exit`, `run.tail`, `run.focus` (answered by the host, loopback only), `team.tidy` — bodies checked against `packages/protocol/src/envelope.ts`; every mutation carries a `requestId` |
+| `POST /api/v1/commands/<name>` | `task.done`, `task.undo`, `task.stop`, `task.reset`, `task.tail`, `run.exit`, `run.tail`, `run.focus` (answered by the host, loopback only), `run.answer` (a question dialog: `option` or `text`), `team.tidy` — bodies checked against `packages/protocol/src/envelope.ts`; every mutation carries a `requestId` |
 
 Answers are envelopes (`{ protocolVersion, ok, result | error }`); errors carry a code
 (`owner_offline`, `unauthorized`, `bad_request`, …) and whether a retry is sensible. A mutation

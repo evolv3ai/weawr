@@ -23,6 +23,9 @@
   // Mark done / Undo in flight, by task: the button and card show it until the console's state
   // reflects the decision (the task in output, or back), not just until the request returns.
   var busy = {};
+  // Answers to a question dialog: the text typed so far, by run (a render replaces the box), and
+  // the runs whose answer is in flight.
+  var drafts = {}, answering = {};
   var MARK = (document.getElementById('mark') || { innerHTML: '' }).innerHTML;
   var ROLE_COLORS = { impl: 'var(--orange-2)', review: '#8FA9B8', usability: '#B79CD9' }, EXTRA = ['#D9C07A', '#7ED184', '#E05252'];
   function roleColor(role, i) { return ROLE_COLORS[role] || EXTRA[i % EXTRA.length]; }
@@ -143,7 +146,7 @@
     var wait = iss.humanWaitMs + (iss.light === 'green' ? 0 : drift());
     var b = busy[f.id + '|' + iss.key];
     return '<div class="alert' + (b ? ' busy' : '') + '"><div class="k"><i class="led ' + esc(iss.light) + ' still"></i><b>' + esc(iss.key) + ' ' + esc(iss.title) + (many ? ' · ' + esc(f.name) : '') + '</b><span class="you' + (wait > 1000 ? '' : ' none') + '" title="time a person was waited on">' + (wait > 1000 ? dur(wait) : '0') + '<small>you</small></span></div>' +
-      '<a class="open" href="#/i/' + esc(f.id) + '/' + encodeURIComponent(iss.key) + '">' + chips(iss) + stats(iss) + '</a><ul class="why">' + lines + '</ul>' + tail + '<div class="acts">' + acts + '</div>' + (b ? '<span class="craft"><i></i></span>' : '') + '</div>';
+      '<a class="open" href="#/i/' + esc(f.id) + '/' + encodeURIComponent(iss.key) + '">' + chips(iss) + stats(iss) + '</a><ul class="why">' + lines + '</ul>' + dialogs(f, iss) + tail + '<div class="acts">' + acts + '</div>' + (b ? '<span class="craft"><i></i></span>' : '') + '</div>';
   }
   // An issue the readiness gate did not start: no runs, so no task — its score, what it leaves out,
   // and the issue to edit. It goes by itself once the issue is edited or picked up.
@@ -170,6 +173,29 @@
     if (!LOCAL) return '';
     var open = openWorkspaces(iss);
     return open.map(function (r) { return '<button class="btn" data-focus="' + esc(f.id) + '|' + esc(r.key) + '" title="Bring ' + esc(r.role || r.rule) + '\'s pane (workspace ' + esc(r.workspaceId) + ') to the front of herdr on this machine">Focus ' + (open.length > 1 ? esc(r.role || r.rule) + ' ' : '') + 'in herdr</button>'; }).join('');
+  }
+  // Each run blocked on a question dialog: the question, a button per option, and a box for the
+  // "Type something." option when the dialog has one. The owner presses it in the pane, after
+  // checking the dialog is still the one shown; a team whose owner is away cannot answer.
+  function dialogs(f, iss) {
+    var away = f.owner && f.owner.status !== 'online';
+    return iss.runs.filter(function (r) { return r.dialog; }).map(function (r) {
+      var d = r.dialog, id = esc(f.id) + '|' + esc(r.key), off = away || answering[f.id + '|' + r.key] ? ' disabled' : '';
+      var why = away ? ' title="The watcher for ' + esc(f.name) + ' is not running; start weawr there to answer"' : '';
+      var opts = d.options.map(function (o) { return '<button class="btn" data-answer="' + id + '|' + o.n + '"' + off + (why || (o.description ? ' title="' + esc(o.description) + '"' : '')) + '>' + o.n + '. ' + esc(o.label) + '</button>'; }).join('');
+      var box = d.typeOption === null || d.typeOption === undefined ? '' : '<div class="acts"><input data-answer-text="' + id + '" placeholder="Or answer in your own words" value="' + esc(drafts[f.id + '|' + r.key] || '') + '"' + off + why + '><button class="btn" data-answer-send="' + id + '"' + off + why + '>Send</button></div>';
+      return '<div class="ask inset"><p class="q"><small>' + esc(r.role || r.rule) + ' asks' + (d.header ? ' · ' + esc(d.header) : '') + '</small>' + esc(d.question) + '</p><div class="acts">' + opts + '</div>' + box + '</div>';
+    }).join('');
+  }
+  // Send one answer: `answer` is { option } or { text }. The dialog goes from the card when the
+  // agent moves on; a dialog that changed meanwhile is refused and nothing is typed.
+  function sendAnswer(pair, answer) {
+    var p = pair.split('|'), key = p[0] + '|' + p[1];
+    if (answering[key]) return;
+    answering[key] = true; render();
+    client.runAnswer(teamIdOf(p[0]), p[1], answer)
+      .then(function (r) { delete answering[key]; delete drafts[key]; render(); toast(p[1] + ': answered with ' + ((r.result || {}).label || 'your answer')); })
+      .catch(function (e) { delete answering[key]; render(); toast(e.code === 'owner_offline' ? 'That team\'s watcher is not running; nothing was typed.' : e.code === 'conflict' ? p[1] + ': the dialog has changed or gone; nothing was typed.' : 'Could not answer ' + p[1] + ': ' + e.message); });
   }
   // The same button while its request is in flight: a turning gear and what the console is doing
   // right now, so a click that takes a few seconds (an agent shutting down) is visibly doing it.
@@ -328,6 +354,7 @@
     if (results) results = section('Reports', iss.runs.filter(function (r) { return r.result; }).length, results);
     var live = iss.runs.filter(function (r) { return r.agentAlive; });
     var acts = live.length ? section('Agents still up', live.length, '<div class="inset pane">' + scrollback(f.id + '|' + iss.key) + '<div class="acts"><button class="btn" data-tail="' + esc(f.id) + '|' + esc(iss.key) + '">Scrollback</button>' + focusButtons(f, iss) + '</div></div>') : focusButtons(f, iss) ? '<div class="acts">' + focusButtons(f, iss) + '</div>' : '';
+    if (iss.runs.some(function (r) { return r.dialog; })) acts = section('Asking you', iss.runs.filter(function (r) { return r.dialog; }).length, dialogs(f, iss)) + acts;
     var b = busy[f.id + '|' + iss.key];
     acts += '<div class="acts">' + (b ? busyButton(b) : iss.cleared && !live.length ? '<span class="pill">marked done by you</span><button class="btn" data-undone="' + esc(f.id) + '|' + esc(iss.key) + '">Undo</button>' : doneButton(f, iss, live)) + '</div>';
     return head + belt() + '<div class="ehead"><span class="key">' + esc(f.name) + '</span><h2>' + esc(iss.title) + '</h2>' + status + '</div><div class="body">' + links + roles + change + results + acts + '</div>';
@@ -338,7 +365,10 @@
     if (!view) return;
     var r = route();
     chosen = r.kind === 'index' ? null : r.id;
+    // A render replaces the answer box someone is typing in: put the caret back where it was.
+    var a = document.activeElement, typing = a && a.dataset && a.dataset.answerText, at = typing ? a.selectionStart : 0;
     root.innerHTML = r.kind === 'issue' ? detail(r.id, r.key) : r.kind === 'team' ? overview() : index();
+    if (typing && root.querySelector) { var box = root.querySelector('input[data-answer-text="' + typing.replace(/"/g, '\\"') + '"]'); if (box) { box.focus(); try { box.setSelectionRange(at, at); } catch (e) {} } }
   }
   // A Mark done or Undo is over when the console's state shows it: the task out of Alerts and
   // in output (or back, for Undo), or gone from the view. A state that never catches up (the
@@ -384,6 +414,8 @@
         .then(function (r) { t.disabled = false; toast(q[1] + ': ' + ((r.result || {}).outcome || 'focused') + ' in herdr'); })
         .catch(function (e) { t.disabled = false; toast('Could not focus ' + q[1] + ': ' + e.message); });
     }
+    else if (t.dataset.answer) { var o = t.dataset.answer.split('|'); sendAnswer(o[0] + '|' + o[1], { option: Number(o[2]) }); }
+    else if (t.dataset.answerSend) { var txt = (drafts[t.dataset.answerSend] || '').trim(); if (txt) sendAnswer(t.dataset.answerSend, { text: txt }); else toast('Type the answer first'); }
     else if (t.dataset.done || t.dataset.undone) {
       var d = (t.dataset.done || t.dataset.undone).split('|'), undo = !!t.dataset.undone, agents = t.dataset.agents, workspaces = Number(t.dataset.workspaces) || 0;
       var closing = agents ? 'Every agent still up on it (' + agents + ') is sent its exit command and shuts down the way it wants, and its herdr workspaces are closed; worktrees stay. ' : workspaces ? 'Its herdr workspaces (' + workspaces + ') are closed; worktrees stay. ' : '';
@@ -410,6 +442,8 @@
         }).catch(function (e) { delete busy[key]; render(); toast(e.code === 'owner_offline' ? 'That team\'s watcher is not running; nothing was changed.' : e.code === 'transport' ? 'The console did not answer; the action may still have happened — watch the task.' : 'Could not: ' + e.message); });
     }
   });
+  root.addEventListener('input', function (e) { var k = e.target.dataset && e.target.dataset.answerText; if (k) drafts[k] = e.target.value; });
+  root.addEventListener('keydown', function (e) { var k = e.target.dataset && e.target.dataset.answerText; if (k && e.key === 'Enter' && (drafts[k] || '').trim()) { e.preventDefault(); sendAnswer(k, { text: drafts[k].trim() }); } });
   document.getElementById('app').addEventListener('click', function (e) { if (e.target.id === 'dim') { sheet = false; render(); } });
   window.addEventListener('hashchange', render);
   setInterval(function () { if (view && !sheet) render(); }, 30000); // elapsed times tick even when nothing changed

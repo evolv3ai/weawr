@@ -312,6 +312,12 @@ Before pressing anything weawr reads the pane again; if the same question is no 
 comment answers a dialog: after it the issue gets "↪️ relayed `<author>`'s answer (`<option>`) to
 the agent in workspace `<id>`", and later comments wait for the agent's next question.
 
+The console can answer the same dialog without `relayReplies` (and without Jev): the run's card
+shows the question with a button per option, and a box when it has "Type something.". A press
+goes through the same path — the pane is read again, nothing is typed if the question changed —
+and the issue gets "↪️ relayed the console's answer (`<option>`) …" (a device token is named
+instead of the console).
+
 ## Prompt templates
 
 `prompt` names a template: a file in `.weawr/prompts/` (yours), else one of the bundled briefs

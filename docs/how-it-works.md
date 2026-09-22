@@ -325,6 +325,14 @@ still the run's — herdr hands ids out again after a restart. herdr is on the h
 is shown, and the `run.focus` command answered, only on the console's loopback address, not over
 Tailscale.
 
+**Answer a question.** A run blocked on Claude Code's question dialog shows the question on its
+alert card and the issue detail, with a button per option and, when the dialog has "Type
+something.", a box for your own words. The `run.answer` command goes to the team's owner, which
+reads the pane again and presses the option (or the type option, the text and Enter) only if the
+same question is still showing — then the issue gets the same "↪️ relayed" note a reply on the
+issue would (see `relayReplies` in configuration.md), naming the console. A team whose owner is
+not running cannot answer; the buttons are disabled.
+
 **Mark done.** The one action on a task, and a person's to take: a finished task sits in Alerts
 — even after an auto-merge — until someone has looked at it (the reports, the scrollback) and
 says it is done. The button sends every agent still up on the task its own exit command

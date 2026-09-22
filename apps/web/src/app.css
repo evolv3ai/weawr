@@ -58,6 +58,11 @@ button{font:inherit;color:inherit}
 .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .btn{font:700 14px var(--font);padding:7px 14px;border:0;min-height:38px;cursor:pointer;color:var(--text);background:var(--frame-2);box-shadow:inset 1px 1px 0 var(--hi),inset -1px -1px 0 var(--lo),0 0 0 1px var(--edge);text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 .btn:disabled{opacity:.5;cursor:default}
+/* a question dialog an agent is blocked on, answered from the card */
+.ask{padding:8px;display:flex;flex-direction:column;gap:8px}
+.ask .q{margin:0;font:600 14px var(--font);color:var(--heading);white-space:pre-wrap;overflow-wrap:anywhere}
+.ask .q small{display:block;font:600 12px var(--font);color:var(--muted)}
+.ask input{flex:1 1 12em;min-width:0;min-height:38px;padding:6px 8px;border:0;font:14px var(--font);color:var(--text);background:var(--inset);box-shadow:inset 1px 1px 0 var(--lo),inset -1px -1px 0 var(--hi),0 0 0 1px var(--edge)}
 .btn.confirm{background:linear-gradient(var(--green-2),var(--green));color:#0D2611;box-shadow:inset 1px 1px 0 #A8E8AD,inset -1px -1px 0 #2E6B36,0 0 0 1px var(--edge)}
 .btn.done{color:var(--green-2)}
 .btn.busy:disabled{opacity:1;cursor:progress;color:var(--yellow)}
