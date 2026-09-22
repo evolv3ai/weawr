@@ -126,8 +126,8 @@ The same fields work on every tracker; what they map to on GitHub is in
   "idleCheck": null,          // when an agent stops without a result, ask whether it is asking, finished or
                               // errored before reporting it, e.g. { "model": "jev-latest" }. null (or absent)
                               // = off. See "What an idle agent is doing" below
-  "relayReplies": null,       // while an agent waits on a question, type a person's reply comment on the issue
-                              // into its pane, e.g. { "threshold": 0.5, "model": "jev-latest" }. null (or
+  "relayReplies": null,       // while an agent waits on a question (in chat or in its question dialog), pass a
+                              // person's reply comment on the issue into its pane, e.g. { "threshold": 0.5, "model": "jev-latest" }. null (or
                               // absent) = off. See "Answering an agent from the issue" below
   "defaults": {               // every rule inherits these
     "worktree": "self",       // who creates the git worktree the run works in.
@@ -287,6 +287,28 @@ on the next poll. Nothing is typed into an agent that is behind a permission dia
 `idleCheck` on, only into one the check called `asking`. The key is `TYPESAFE_API_KEY`, as for
 `readiness`; with `relayReplies` set and no key, the watcher says so once and relays nothing.
 `weawr dry-run` does not relay.
+
+### Question dialogs
+
+Claude often asks with its question dialog (AskUserQuestion) rather than in chat. herdr reports that
+pane as blocked, like a permission prompt, but weawr tells them apart: a pane that ends with the
+dialog's "Enter to select" footer is a question. Its report, under `onBlocked`, says the agent is
+asking, gives the question and the numbered options with their descriptions, and ends "Reply on
+this issue with your choice." A permission prompt keeps the "waiting for approval or input" report
+and is never typed into.
+
+With `relayReplies` on, each comment made on the issue after the dialog was reported goes to Jev as
+one choice: which of the options does it pick, or none of them?
+
+- **an option, with confidence at or above `threshold`**: that option's number is pressed in the pane.
+- **none, a lower confidence, or a failed call**: when the dialog has "Type something.", that is
+  picked and the comment is typed in as one line, then Enter. Without it, the comment is logged
+  and left for you to answer in the pane.
+
+Before pressing anything weawr reads the pane again; if the same question is no longer showing
+(it was answered in the pane, or the agent moved on), nothing is typed and that is logged. One
+comment answers a dialog: after it the issue gets "↪️ relayed `<author>`'s answer (`<option>`) to
+the agent in workspace `<id>`", and later comments wait for the agent's next question.
 
 ## Prompt templates
 

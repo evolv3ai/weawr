@@ -50,7 +50,9 @@ import type { TeamSnapshot } from '@weawr/protocol';
 import { Enricher } from './enrich.js';
 import { READINESS_KEY_ENV, askReadiness, describeVerdict, missingInWords } from './readiness.js';
 import type { ReadinessVerdict } from './readiness.js';
-import { RELAY_KEY_ENV, askRelay, awaitingReply, newReplies, relayPrompt } from './relay.js';
+import { RELAY_KEY_ENV, askDialogPick, askRelay, awaitingDialogReply, awaitingReply, dialogKeys, newReplies, relayPrompt } from './relay.js';
+import { describeDialog, parseQuestionDialog } from './question-dialog.js';
+import type { QuestionDialog } from './question-dialog.js';
 import { IDLE_CHECK_KEY_ENV, IDLE_TAIL_LINES, askIdle } from './idle-check.js';
 import type { IdleKind } from './idle-check.js';
 import { teamView, indexSnapshot, timelineOf } from './projection.js';
@@ -583,12 +585,12 @@ export class TeamEngine {
   async relayReplies(issues: any[]) {
     const config = this.cfg.relayReplies;
     if (!config) return;
-    const waiting = Object.entries(this.state.runs).filter(([, run]) => awaitingReply(run));
+    const waiting = Object.entries(this.state.runs).filter(([, run]) => awaitingReply(run) || awaitingDialogReply(run));
     if (!waiting.length) return;
     const apiKey = this.env[RELAY_KEY_ENV];
     if (!apiKey) { this.warnOnce('relayReplies:no-key', `reply relay is configured but ${RELAY_KEY_ENV} is not set (environment or .env.local); replies on the issue are not passed to waiting agents`); return; }
     for (const [key, run] of waiting) {
-      try { await this.relayRepliesTo(key, run, issues, apiKey); }
+      try { await (awaitingDialogReply(run) ? this.relayDialogReplyTo(key, run, issues, apiKey) : this.relayRepliesTo(key, run, issues, apiKey)); }
       catch (e: any) { this.log(`${key}: replies not relayed: ${e.message}`); }
     }
   }
@@ -628,6 +630,47 @@ export class TeamEngine {
     this.log(`${key}: relayed ${relay.length} repl${relay.length === 1 ? 'y' : 'ies'} to the agent`);
     const who = [...new Set(relay.map((c) => c.author))].join(', ');
     await this.report(key, this.ruleFor(run), { comment: true }, coordinator(`↪️ relayed ${who}'s reply to the agent in workspace \`${run.workspaceId}\``));
+  }
+
+  /**
+   * Answer a question dialog from the issue: each new comment is put to Jev as a choice between the
+   * dialog's options. A confident pick presses that option's number; anything else — `none`, a low
+   * confidence, a failed call — picks "Type something." and types the comment in, or, with no such
+   * option, is logged and left. The pane is read again first: a dialog that has changed or gone is
+   * not typed into. One answer per dialog; every comment looked at moves `run.relayedUpTo` past it.
+   */
+  async relayDialogReplyTo(key: string, run: any, issues: any[], apiKey: string) {
+    const config = this.cfg.relayReplies!;
+    const dialog: QuestionDialog = run.askedDialog;
+    const issueKey = run.issueKey || issueKeyOf(key);
+    const issue = issues.find((i?: any) => i.identifier === issueKey) ?? await this.tracker.issueByKey(issueKey);
+    for (const c of newReplies(issue?.comments || [], run)) {
+      let pick = { option: null as number | null, confidence: null as number | null };
+      try {
+        pick = await askDialogPick({ dialog, comment: c.body, config, apiKey, fetchImpl: this.fetchImpl });
+        this.log(`${key}: ${c.author}'s comment picks ${pick.option === null ? 'none of the options' : `option ${pick.option}`} (${pick.confidence === null ? 'no confidence' : pick.confidence.toFixed(2)}, threshold ${config.threshold})`);
+      } catch (e: any) {
+        this.log(`${key}: reply check failed (${e.name === 'TimeoutError' ? 'timed out' : e.message}); typing ${c.author}'s comment in if the dialog takes text`);
+      }
+      const answer = dialogKeys(dialog, pick, config.threshold, c.body);
+      const settle = () => { run.relayedUpTo = c.createdAt; this.saveState(); };
+      if (!answer) { this.log(`${key}: ${c.author}'s comment picks no option and the dialog takes no text; left for a person`); settle(); continue; }
+      let now: QuestionDialog | null = null;
+      try { now = parseQuestionDialog(await this.paneLines(run.agentName, 40)); } catch (e: any) { this.log(`${key}: could not read the pane (${e.message})`); }
+      if (now?.question !== dialog.question) { this.log(`${key}: the question dialog is no longer on the pane; ${c.author}'s answer is not typed in`); settle(); return; }
+      try {
+        await this.herdr.sendKeys(run.paneId, ...answer.keys);
+        if (answer.text !== null) { await this.herdr.sendText(run.paneId, answer.text); await this.herdr.sendKeys(run.paneId, 'Enter'); }
+      } catch (e: any) {
+        this.log(`${key}: the answer did not reach the agent (${e.message}); will try again`);
+        return;
+      }
+      settle();
+      this.commit(() => { this.emit('run.reply_relayed', key, { authors: [c.author], count: 1, option: answer.label }); });
+      this.log(`${key}: answered the question dialog with ${answer.label} from ${c.author}'s comment`);
+      await this.report(key, this.ruleFor(run), { comment: true }, coordinator(`↪️ relayed ${c.author}'s answer (${answer.label}) to the agent in workspace \`${run.workspaceId}\``));
+      return;
+    }
   }
 
   /** Tell the reporter the issue was not started and why, under the rule's onBlocked policy. */
@@ -1156,14 +1199,26 @@ export class TeamEngine {
         this.emit('run.blocked', key, { workspaceId: run.workspaceId });
         if (!run.notified.blocked) {
           run.notified.blocked = true; this.saveState();
-          const tail = await this.tail(name, 12);
-          await this.report(key, rule, rule.onBlocked, coordinator(`✋ the \`${rule.role || rule.name}\` agent for ${key} is waiting for approval or input in herdr workspace \`${run.workspaceId}\`.${tail}`), 'request');
+          // A question dialog (AskUserQuestion) is shown on the issue, where it can be answered
+          // (relayReplies); anything else — a permission prompt — is approved in the pane.
+          let dialog: QuestionDialog | null = null;
+          try { dialog = parseQuestionDialog(await this.paneLines(name, 40)); } catch { /* reported as a prompt */ }
+          const agent = `the \`${rule.role || rule.name}\` agent for ${key}`;
+          if (dialog) {
+            run.askedDialog = dialog; run.askedAt = this.clock().toISOString(); this.saveState();
+            const answer = this.cfg.relayReplies ? 'Reply on this issue with your choice.' : 'Answer it in the pane.';
+            await this.report(key, rule, rule.onBlocked, coordinator(`💬 ${agent} is asking a question in herdr workspace \`${run.workspaceId}\`:\n\n${describeDialog(dialog)}\n\n${answer}`), 'request');
+          } else {
+            run.askedDialog = null; this.saveState();
+            const tail = await this.tail(name, 12);
+            await this.report(key, rule, rule.onBlocked, coordinator(`✋ ${agent} is waiting for approval or input in herdr workspace \`${run.workspaceId}\`.${tail}`), 'request');
+          }
           await this.markWaiting(key, run, rule.onBlocked);
         }
         const next = await this.herdr.waitAgent(name, { until: ['working', 'idle', 'done'], timeoutMs: 6 * 3600e3 });
         this.log(`${key}: unblocked → ${next}`);
         this.emit('run.working', key, { after: 'blocked' });
-        run.notified.blocked = false;
+        run.notified.blocked = false; run.askedDialog = null;
         // Idle or done after a dialog goes round again: a result finalizes it, a question keeps it waiting.
         if (next === 'working') await this.markWorking(key, run, rule);
         continue;

@@ -134,6 +134,16 @@ export class Herdr {
     return this.run(args, { timeoutMs: wait ? timeoutMs + 10_000 : undefined });
   }
 
+  /** Press keys in a pane, by herdr's names for them: "2", "Enter", "esc". */
+  async sendKeys(paneId, ...keys) {
+    return this.run(['pane', 'send-keys', paneId, ...keys]);
+  }
+
+  /** Type literal text into a pane. Nothing is submitted: press Enter with sendKeys for that. */
+  async sendText(paneId, text) {
+    return this.run(['pane', 'send-text', paneId, text]);
+  }
+
   /**
    * Ask the agent to exit, and wait until herdr stops seeing it.
    *
