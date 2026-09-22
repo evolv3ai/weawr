@@ -151,6 +151,8 @@ export class TeamEngine {
   readonly env: NodeJS.ProcessEnv;
   /** Readiness verdicts by issue key, when the store is not a durable one (a test); see readinessMemo. */
   private readinessMemory = new Map<string, any>();
+  /** The open issues the last poll saw, as the snapshot needs them: what a readiness verdict is checked against. */
+  private lastOpenIssues: Array<{ identifier: string; title: string; url: string | null; updatedAt: string }> | null = null;
   private readonly logger: (line: string) => void;
   /** Where the process announces itself on this machine; null for an engine that should not (a test, a dry run). */
   registration: RegistrationTarget | null;
@@ -515,6 +517,7 @@ export class TeamEngine {
     const since = new Date(this.clock().getTime() - this.cfg.lookbackDays * 86400e3).toISOString();
     const viewer = await this.tracker.me();
     const issues = await this.tracker.openIssues({ sinceIso: since });
+    this.lastOpenIssues = issues.map((i: any) => ({ identifier: i.identifier, title: i.title, url: i.url || null, updatedAt: i.updatedAt }));
     if (!this.dry) { await this.relayReplies(issues); await this.settleClosedIssues(issues); }
     const ctx = { viewer, now: this.clock().getTime() };
     const candidates = pickCandidates({
@@ -608,8 +611,16 @@ export class TeamEngine {
     this.commit(() => { this.rememberReadiness(issueKey, record); this.emit('issue.not_ready', null, { issueKey, rule: rule.name, score: verdict.score, missing: verdict.missing }); });
     await this.askReporter(issue, rule, verdict);
     // What was just written on the issue changed its updatedAt. The verdict is for the issue as it
-    // now stands, so only a later edit (or a move back to the queue) asks again.
-    try { const fresh = await this.tracker.issueByKey(issueKey); if (fresh?.updatedAt) this.rememberReadiness(issueKey, { ...record, updatedAt: fresh.updatedAt }); }
+    // now stands, so only a later edit (or a move back to the queue) asks again. The poll's copy of
+    // the issue moves on with it, so the console shows it held from now, not from the next poll.
+    try {
+      const fresh = await this.tracker.issueByKey(issueKey);
+      if (fresh?.updatedAt) {
+        this.rememberReadiness(issueKey, { ...record, updatedAt: fresh.updatedAt });
+        const seen = this.lastOpenIssues?.find((i) => i.identifier === issueKey);
+        if (seen) seen.updatedAt = fresh.updatedAt;
+      }
+    }
     catch { /* the next poll may ask once more; the verdict will be the same */ }
     return false;
   }
@@ -1991,11 +2002,14 @@ export class TeamEngine {
     const events = isDurable(this.store) ? timelineOf(this.store.eventsAfter(0, 100_000)) : [];
     const cleared: Record<string, number> = {};
     if (isDurable(this.store)) for (const a of this.store.acknowledgements()) cleared[a.issueKey] = Date.parse(a.at) || 0;
+    // The gate's verdicts on the issues the last poll saw: a held one is an alert (projection.ts).
+    const readiness: Record<string, any> = {};
+    if (this.cfg.readiness) for (const i of this.lastOpenIssues || []) { const v = this.readinessMemo(i.identifier); if (v) readiness[i.identifier] = v; }
     const enricher = this.enrichment();
     const view = teamView({
       id: slug(this.cfg.name), teamId: this.ids.teamId, repo: this.paths.repo, config: this.cfg, state: { runs }, events, index, sizes,
       registry: this.lastRegistration, stale: false, enrich: enricher.view(), cleared, seen: this.seen, now: nowMs,
-      recipeRevision: this.recipeRevision, trackerScope: scopeOf(this.cfg.trackerSpec),
+      recipeRevision: this.recipeRevision, trackerScope: scopeOf(this.cfg.trackerSpec), readiness, openIssues: this.lastOpenIssues,
     });
     enricher.refresh(view.issues, nowMs);
     if (!view.watcher.workspaceId && process.env.HERDR_WORKSPACE_ID) view.watcher.workspaceId = process.env.HERDR_WORKSPACE_ID;

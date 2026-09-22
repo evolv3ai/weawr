@@ -449,3 +449,24 @@ test('a settled run — its issue canceled, its PR closed — raises no alert; a
   assert.equal(runState({ status: 'failed', settled: { why: 'issue_canceled' } }, null).needsYou, null);
   assert.equal(runState({ status: 'running', settled: { why: 'issue_canceled' } }, null).needsYou, 'gone');
 });
+
+test('an issue the readiness gate held is one "held" alert with its score and what it leaves out, until it is edited or picked up', () => {
+  // WTR-18: a held issue was only on Linear, as the gate's comment; the console never showed it.
+  const issue = { identifier: 'WTR-9', title: 'Rename the thing', url: 'https://linear.app/o/issue/WTR-9', updatedAt: iso(9, 5) };
+  const notReady = { ready: false, score: 0.04, missing: 'target_value', confidence: 0.9, updatedAt: iso(9, 5), at: iso(9, 4) };
+  const view = (readiness, openIssues = [issue], runs = {}) => teamView({ id: 'x', repo: '/r', config: { ...CONFIG, readiness: { threshold: 0.5, model: 'jev-latest' } }, state: { runs }, readiness, openIssues, now: T(10, 0) });
+
+  const held = view({ 'WTR-9': notReady }).alerts;
+  assert.equal(held.length, 1);
+  assert.deepEqual([held[0].kind, held[0].issueKey, held[0].title, held[0].url, held[0].score, held[0].missing, held[0].runKey, held[0].light], ['held', 'WTR-9', 'Rename the thing', issue.url, 0.04, 'target_value', null, 'yellow']);
+  assert.match(held[0].text, /readiness 0\.04, needs 0\.5.*a specific value, name or format/);
+  assert.equal(held[0].sinceMs, T(10, 0) - T(9, 4), 'held since the verdict');
+
+  assert.deepEqual(view({ 'WTR-9': { ready: true, score: 0.8, missing: null, confidence: null, updatedAt: iso(9, 5), at: iso(9, 4) } }).alerts, [], 'a ready verdict holds nothing');
+  assert.deepEqual(view({ 'WTR-9': notReady }, [{ ...issue, updatedAt: iso(9, 30) }]).alerts, [], 'an edited issue is no longer the one judged');
+  assert.deepEqual(view({ 'WTR-9': notReady }, []).alerts, [], 'a closed (or unseen) issue is not held');
+  assert.deepEqual(view({ 'WTR-9': notReady }, null).alerts, [], 'no poll yet: unknown, not held');
+  assert.deepEqual(view({}).alerts, [], 'no verdict, no alert');
+  const picked = view({ 'WTR-9': notReady }, [issue], { 'WTR-9@impl': { rule: 'implement', role: 'impl', status: 'running', issueKey: 'WTR-9', title: 'Rename the thing', startedAt: iso(9, 50), agentName: 'wtr-9-impl' } });
+  assert.ok(!picked.alerts.some((a) => a.kind === 'held'), 'a picked-up issue is not held');
+});

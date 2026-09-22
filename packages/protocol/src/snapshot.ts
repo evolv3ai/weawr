@@ -99,8 +99,10 @@ export const taskViewSchema = s.object({
 });
 
 export const alertSchema = s.object({
-  kind: s.string(), issueKey: s.string(), title: s.string(), runKey: s.string(), role: s.maybe(s.string()), agent: s.maybe(s.string()), agentKind: s.maybe(s.string()),
+  kind: s.string(), issueKey: s.string(), title: s.string(), runKey: s.maybe(s.string()), role: s.maybe(s.string()), agent: s.maybe(s.string()), agentKind: s.maybe(s.string()),
   workspaceId: s.maybe(s.string()), prUrl: s.maybe(s.string()), url: s.maybe(s.string()), text: s.string(), sinceMs: s.number(), light: s.string(), verdicts: s.maybe(s.string()),
+  // A "held" alert (an issue the readiness gate did not start) has no run; these say why it was held.
+  score: s.maybe(s.number()), missing: s.maybe(s.string()),
 });
 
 export const productionSchema = s.object({ finished: s.number(), merged: s.number(), workingMs: s.number(), humanMs: s.number() });
