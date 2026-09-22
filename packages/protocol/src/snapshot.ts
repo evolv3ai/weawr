@@ -57,6 +57,8 @@ export const runViewSchema = s.object({
   phrase: s.string(),
   needsYou: s.maybe(s.string()),
   settling: s.maybe(s.string()),
+  /** Why the run is settled — its issue closed or canceled, its PR closed or merged — or null. A settled run raises no alert. */
+  settled: s.maybe(s.string()),
   result: s.maybe(s.object({ status: s.string(), prUrl: s.maybe(s.string()), summary: s.string(), notes: s.string(), live: s.boolean(), verdict: s.maybe(s.string()), verdictSource: s.maybe(s.string()), verdictHead: s.maybe(s.string()) })),
   prUrl: s.maybe(s.string()),
   error: s.maybe(s.string()),

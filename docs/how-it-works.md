@@ -113,7 +113,10 @@ the issue to move — capped per issue by `maxNudges`, after which a person is a
    you ([roles](roles.md#the-briefs-that-ship)). When GitHub says it is **merged**, you get a
    notification saying so and naming the workspace and worktree the run is still holding, and the
    run is recorded as `merged`. Nothing is torn down unless you asked for it in `onMerged` — see
-   below. A PR **closed without merging** just stops being watched. While it is open, the same
+   below. A PR **closed without merging** just stops being watched. Either way the run is
+   **settled**: the console raises no alert for it any more. So is a finished run whose issue is
+   no longer open (completed or canceled), which the watcher notices on its poll; `weawr reset
+   <KEY>` still forgets a run entirely. While the PR is open, the same
    once-a-minute read also notices when it has drifted into **conflicts** with its base — see
    [Keeping up with `main`](#keeping-up-with-main). `weawr once` watches too: after its one poll
    it stays up while it supervises the runs it started and until the PRs they opened are merged or

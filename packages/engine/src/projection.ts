@@ -145,9 +145,17 @@ export function ownsPr(run: any): boolean { return !!(run.prUrl || run.result?.p
  *   reviewer    the task's PR belongs to another run, so this run's result is a report on it —
  *               findings for whoever merges, never a decision the reviewer is holding open.
  */
+const SETTLED_PHRASE: Record<string, string> = { issue_canceled: 'issue canceled', pr_closed: 'PR closed' };
+
 export function runState(run: any, agent: any, { othersLive = false, reviewer = false }: { othersLive?: boolean; reviewer?: boolean } = {}): { light: string; phrase: string; needsYou: string | null; settling?: string | null } {
   const st = run.status;
   const a = agent?.agent_status;
+  // Settled (team.ts settle()): its issue was closed or its PR closed or merged, so nothing about
+  // it is a person's to act on. It reads as what ended it; a live run is described as usual.
+  if (run.settled && st !== 'running' && st !== 'starting') {
+    const base = runState({ ...run, settled: null }, agent, { othersLive, reviewer });
+    return { light: 'grey', phrase: SETTLED_PHRASE[run.settled.why] || base.phrase, needsYou: null };
+  }
   if (st === 'running' || st === 'starting') {
     if (!agent) return { light: 'red', phrase: 'agent gone', needsYou: 'gone' };
     if (a === 'blocked') return { light: 'red', phrase: 'blocked on a dialog', needsYou: 'blocked' };
@@ -269,6 +277,8 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
       recipeRevision: run.recipeRevision ?? null, attemptId: run.attemptId ?? null,
       // What the idle check said the stopped agent is doing, when it was asked; see idle-check.ts.
       idleKind: run.idleKind || null,
+      // Why the run is settled (its issue or PR closed), or null: a settled run raises no alert.
+      settled: run.settled?.why || null,
     };
   });
 
@@ -319,7 +329,7 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
   const alerts: any[] = [];
   const DAY = 86400e3;
   for (const iss of issues) for (const r of iss.runs) {
-    if (iss.cleared) continue;
+    if (iss.cleared || r.settled) continue;
     let why = r.needsYou;
     // A run that failed or stopped is worth a card while it is news. After a day it is history:
     // state.json keeps it forever, and the issue has usually been retried or given up on by then.
@@ -345,7 +355,7 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
   // a task that already has a card (a decision, a failure, an agent holding on) needs no second.
   // After a day it is history, like a failure: state.json remembers every task ever run.
   for (const iss of issues) {
-    if (iss.cleared || iss.bucket === 'inflight' || !iss.finishedAt || alerts.some((a: any) => a.issueKey === iss.key)) continue;
+    if (iss.cleared || iss.bucket === 'inflight' || !iss.finishedAt || iss.runs.some((o: any) => o.settled) || alerts.some((a: any) => a.issueKey === iss.key)) continue;
     const finishedAt = Date.parse(iss.finishedAt);
     if (now - finishedAt > DAY) continue;
     const r = iss.runs.find((o: any) => o.ownsPr) || iss.runs[0];
