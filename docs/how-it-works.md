@@ -318,6 +318,13 @@ branch. One call per task, every 90s for tasks in flight or finished this
 week and every 30 minutes for older ones; without a credential those fields are not shown.
 Nothing is written except the registry.
 
+**Focus in herdr.** On an alert card and the issue detail, each run whose herdr workspace is
+still open has a button that brings its pane to the front of herdr (`herdr agent focus` for the
+run's agent, else `herdr workspace focus`), after checking the workspace under the run's id is
+still the run's — herdr hands ids out again after a restart. herdr is on the host, so the button
+is shown, and the `run.focus` command answered, only on the console's loopback address, not over
+Tailscale.
+
 **Mark done.** The one action on a task, and a person's to take: a finished task sits in Alerts
 — even after an auto-merge — until someone has looked at it (the reports, the scrollback) and
 says it is done. The button sends every agent still up on the task its own exit command

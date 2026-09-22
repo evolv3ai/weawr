@@ -137,6 +137,7 @@
     if (!seen.merge && !seen.answer && iss.url) acts += '<a class="btn" href="' + esc(iss.url) + '" target="_blank" rel="noopener">Open issue</a>';
     var live = iss.runs.filter(function (r) { return r.agentAlive; });
     if (live.length) acts += '<button class="btn" data-tail="' + esc(f.id) + '|' + esc(iss.key) + '">Scrollback</button>';
+    acts += focusButtons(f, iss);
     acts += doneButton(f, iss, live);
     var tail = scrollback(f.id + '|' + iss.key);
     var wait = iss.humanWaitMs + (iss.light === 'green' ? 0 : drift());
@@ -161,6 +162,15 @@
   }
   // The runs whose herdr workspace is still open: what Mark done closes after the agents.
   function openWorkspaces(iss) { return iss.runs.filter(function (r) { return r.workspaceId && r.workspaceOpen; }); }
+  // herdr is on the host: bringing a pane to the front means something only to a person at it, so
+  // the page offers it only when it is open on the host itself (the host refuses it otherwise).
+  var LOCAL = /^(localhost|127(\.\d+){3}|\[::1\])$/.test(location.hostname);
+  // One per run whose workspace is still open: that run's pane to the front of herdr.
+  function focusButtons(f, iss) {
+    if (!LOCAL) return '';
+    var open = openWorkspaces(iss);
+    return open.map(function (r) { return '<button class="btn" data-focus="' + esc(f.id) + '|' + esc(r.key) + '" title="Bring ' + esc(r.role || r.rule) + '\'s pane (workspace ' + esc(r.workspaceId) + ') to the front of herdr on this machine">Focus ' + (open.length > 1 ? esc(r.role || r.rule) + ' ' : '') + 'in herdr</button>'; }).join('');
+  }
   // The same button while its request is in flight: a turning gear and what the console is doing
   // right now, so a click that takes a few seconds (an agent shutting down) is visibly doing it.
   function busyButton(b) {
@@ -317,7 +327,7 @@
     var results = iss.runs.filter(function (r) { return r.result && r.result.summary; }).map(function (r) { return '<div class="inset pane"><div class="sub" style="padding-top:0">' + esc(r.role || r.rule) + ' · ' + esc(verdict(r)) + '</div>' + (r.result.summary.length > 600 && !expanded[r.key] ? '<p class="summary clamp">' + esc(r.result.summary) + '</p><button class="more" data-expand="' + esc(r.key) + '">Read all</button>' : '<p class="summary">' + esc(r.result.summary) + '</p>' + (r.result.notes ? '<p class="summary" style="color:var(--dim)">' + esc(r.result.notes) + '</p>' : '')) + '</div>'; }).join('');
     if (results) results = section('Reports', iss.runs.filter(function (r) { return r.result; }).length, results);
     var live = iss.runs.filter(function (r) { return r.agentAlive; });
-    var acts = live.length ? section('Agents still up', live.length, '<div class="inset pane">' + scrollback(f.id + '|' + iss.key) + '<div class="acts"><button class="btn" data-tail="' + esc(f.id) + '|' + esc(iss.key) + '">Scrollback</button></div></div>') : '';
+    var acts = live.length ? section('Agents still up', live.length, '<div class="inset pane">' + scrollback(f.id + '|' + iss.key) + '<div class="acts"><button class="btn" data-tail="' + esc(f.id) + '|' + esc(iss.key) + '">Scrollback</button>' + focusButtons(f, iss) + '</div></div>') : focusButtons(f, iss) ? '<div class="acts">' + focusButtons(f, iss) + '</div>' : '';
     var b = busy[f.id + '|' + iss.key];
     acts += '<div class="acts">' + (b ? busyButton(b) : iss.cleared && !live.length ? '<span class="pill">marked done by you</span><button class="btn" data-undone="' + esc(f.id) + '|' + esc(iss.key) + '">Undo</button>' : doneButton(f, iss, live)) + '</div>';
     return head + belt() + '<div class="ehead"><span class="key">' + esc(f.name) + '</span><h2>' + esc(iss.title) + '</h2>' + status + '</div><div class="body">' + links + roles + change + results + acts + '</div>';
@@ -368,6 +378,12 @@
     else if (t.id === 'lockbtn') { fetch('/lock', { method: 'POST' }).then(function () { location.replace('/'); }); }
     else if (t.dataset.choose) { sheet = false; var to = t.dataset.choose === 'all' ? '#/' : '#/f/' + encodeURIComponent(t.dataset.choose); if (location.hash === to || (to === '#/' && !location.hash)) render(); else location.hash = to; }
     else if (t.dataset.tail) { var p = t.dataset.tail.split('|'); t.disabled = true; client.tail(teamIdOf(p[0]), p[1]).then(function (j) { tails[t.dataset.tail] = j.blocks || '(empty)'; render(); }).catch(function (e) { tails[t.dataset.tail] = '(' + e.message + ')'; render(); }); }
+    else if (t.dataset.focus) {
+      var q = t.dataset.focus.split('|'); t.disabled = true;
+      client.runFocus(teamIdOf(q[0]), q[1])
+        .then(function (r) { t.disabled = false; toast(q[1] + ': ' + ((r.result || {}).outcome || 'focused') + ' in herdr'); })
+        .catch(function (e) { t.disabled = false; toast('Could not focus ' + q[1] + ': ' + e.message); });
+    }
     else if (t.dataset.done || t.dataset.undone) {
       var d = (t.dataset.done || t.dataset.undone).split('|'), undo = !!t.dataset.undone, agents = t.dataset.agents, workspaces = Number(t.dataset.workspaces) || 0;
       var closing = agents ? 'Every agent still up on it (' + agents + ') is sent its exit command and shuts down the way it wants, and its herdr workspaces are closed; worktrees stay. ' : workspaces ? 'Its herdr workspaces (' + workspaces + ') are closed; worktrees stay. ' : '';

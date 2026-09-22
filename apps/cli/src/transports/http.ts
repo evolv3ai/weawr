@@ -40,6 +40,12 @@ export function tailscaleAddresses(ifaces: NodeJS.Dict<os.NetworkInterfaceInfo[]
   return out;
 }
 
+/** A request from this machine itself: 127.0.0.0/8 or ::1, including IPv4 mapped into IPv6. */
+export function isLoopback(address: string | undefined): boolean {
+  const a = String(address || '').replace(/^::ffff:/i, '');
+  return a === '::1' || /^127\.\d+\.\d+\.\d+$/.test(a);
+}
+
 function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   for (const part of String(header || '').split(';')) { const i = part.indexOf('='); if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); }
@@ -145,7 +151,7 @@ export function createHandler({ gate, hub, hostname = os.hostname(), log = () =>
   });
 
   /** The v1 command routes, each one application command with the team named in the body. */
-  async function runCommand(name: string, body: any, p: Principal): Promise<CommandResult & { teamId?: string }> {
+  async function runCommand(name: string, body: any, p: Principal, loopback = false): Promise<CommandResult & { teamId?: string }> {
     const schema = (commandSchemas as any)[name];
     if (!schema) return { ok: false, error: { code: 'unknown_command', message: `no command ${name}; known: ${Object.keys(commandSchemas).join(', ')}` } };
     const v = validate(schema, body);
@@ -163,6 +169,12 @@ export function createHandler({ gate, hub, hostname = os.hostname(), log = () =>
       case 'task.tail': targets.push([b.team, { type: 'task.tail', issueKey: b.task, lines: b.lines }]); break;
       case 'run.exit': targets.push([b.team, { type: 'run.exit', runKey: b.run, requestId: scopedId }]); break;
       case 'run.tail': targets.push([b.team, { type: 'agent.tail', runKey: b.run, lines: b.lines }]); break;
+      case 'run.focus': {
+        // herdr is on this machine: focusing a pane means something only to a person sitting at it.
+        if (!loopback) return { ok: false, error: { code: 'forbidden', message: 'run.focus is answered only on loopback: herdr focuses a pane on this machine, not yours' } };
+        const r = await hub.focusRun(b.team, b.run);
+        return r.ok ? { ok: true, result: { operation: null, result: r.result } } : r;
+      }
       case 'team.tidy': {
         const ids = b.team ? [b.team] : [...hub.entries.values()].filter((e) => e.online).map((e) => e.teamId);
         for (const id of ids) targets.push([id, { type: 'team.tidy', requestId: scopedId }]);
@@ -255,7 +267,7 @@ export function createHandler({ gate, hub, hostname = os.hostname(), log = () =>
       if (req.method === 'POST' && (m = /^\/api\/v1\/commands\/([^/]+)$/.exec(url.pathname))) {
         if (!mayMutate(req, p)) return fail(res, 403, { code: 'forbidden', message: 'a browser may only act from the console\'s own origin; a native client sends a device token' });
         let body: any; try { body = JSON.parse(await readBody(req) || '{}'); } catch { return fail(res, 400, { code: 'bad_request', message: 'the body is not JSON' }); }
-        const r = await runCommand(m[1], body, p);
+        const r = await runCommand(m[1], body, p, isLoopback(address(req)));
         if (r.ok) log(`console: ${m[1]} ${JSON.stringify(body)} → ${JSON.stringify((r.result as any).result).slice(0, 200)}`);
         if (!r.ok) return fail(res, statusFor(r.error.code), { ...r.error, retryable: r.error.retryable ?? (r.error.code === 'owner_offline' || r.error.code === 'herdr_unavailable') });
         return ok(res, r.result, (r.result as any).operation && !['completed', 'failed', 'partial'].includes((r.result as any).operation.status) ? 202 : 200);

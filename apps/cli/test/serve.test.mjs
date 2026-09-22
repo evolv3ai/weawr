@@ -13,8 +13,9 @@ import { teamPaths, writeRegistration, SqliteStore, storePath } from '@weawr/eng
 import { validate, teamSnapshotSchema, hostSnapshotSchema, describeIssues } from '@weawr/protocol';
 import { WeawrClient } from '@weawr/client';
 import { TeamHub } from '../build/transports/hub.js';
-import { createHandler, listen } from '../build/transports/http.js';
+import { createHandler, listen, isLoopback } from '../build/transports/http.js';
 import { Gate, hashPasscode, newDeviceToken } from '../build/transports/gate.mjs';
+import { Herdr } from '@weawr/engine/adapters/herdr.mjs';
 
 const ENGINE = fileURLToPath(new URL('../../../packages/engine/dist/index.js', import.meta.url));
 const IPC = fileURLToPath(new URL('../build/transports/ipc.js', import.meta.url));
@@ -59,10 +60,9 @@ function owner(t, dir, teamId) {
   return new Promise((resolve, reject) => { child.stdout.on('data', (d) => { if (String(d).includes('ready')) resolve(child); }); child.on('exit', (c) => reject(new Error(`owner exited ${c}`))); });
 }
 
-async function host(t, { gate = new Gate({ hash: null }), devices = {} } = {}) {
+async function host(t, { gate = new Gate({ hash: null }), devices = {}, herdr = { async run() { throw new Error('no herdr here'); }, async readAgent() { return 'offline screen'; } } } = {}) {
   const regDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weawr-regs-'));
   t.after(() => fs.rmSync(regDir, { recursive: true, force: true }));
-  const herdr = { async run() { throw new Error('no herdr here'); }, async readAgent() { return 'offline screen'; } };
   const hub = new TeamHub({ herdr, version: 'test', promptsRoot: PROMPTS, registrations: regDir, legacyRegistry: null, intervalMs: 200, log: () => {} });
   const { handler } = createHandler({ gate, hub, webDir: WEB, devices: () => devices, version: 'test', log: () => {} });
   const bound = await listen({ handler, port: 0, gated: false });
@@ -211,4 +211,60 @@ test('serve: a gated host locks the page, refuses the API without a session, and
   for (let i = 0; i < 5; i++) await fetch(`${h.url}/unlock`, { method: 'POST', headers: { 'content-type': 'application/json', origin: h.url }, body: JSON.stringify({ code: '0000' }) });
   const lockedOut = await fetch(`${h.url}/unlock`, { method: 'POST', headers: { 'content-type': 'application/json', origin: h.url }, body: JSON.stringify({ code: '4321' }) });
   assert.equal(lockedOut.status, 429);
+});
+
+test('serve: run.focus brings the run\'s own agent pane to the front of herdr, from loopback only, and only for a run whose workspace is open', async (t) => {
+  // The real adapter over a fake herdr binary: every call is recorded, and herdr has w1 (the
+  // run's, labelled as the run labelled it, with its agent in it) and nothing under w9.
+  const calls = [];
+  const agent = { name: 'gh-1-impl', agent_status: 'idle', workspace_id: 'w1', pane_id: 'p7' };
+  class FakeHerdr extends Herdr {
+    async run(args) {
+      calls.push(args);
+      if (args[0] === 'api') return { result: { snapshot: { version: '9', agents: [agent], workspaces: [{ workspace_id: 'w1', label: 'GH-1 impl' }], panes: [] } } };
+      if (args[0] === 'workspace' && args[1] === 'get') { if (args[2] === 'w1') return { result: { workspace: { workspace_id: 'w1', label: 'GH-1 impl' } } }; const e = new Error('not found'); e.code = 'workspace_not_found'; throw e; }
+      if (args[0] === 'agent' && args[1] === 'get') return { result: { agent } };
+      return { result: {} };
+    }
+  }
+  const dir = repo(t, 'focus', {
+    'GH-1@impl': RUN('', 'GH-1@impl', { status: 'running', finishedAt: null, result: null, workspaceLabel: 'GH-1 impl' }),
+    'GH-2@impl': RUN('', 'GH-2@impl', { workspaceId: 'w9', workspaceLabel: 'GH-2 impl' }),
+  });
+  const h = await host(t, { herdr: new FakeHerdr() });
+  h.reg('ffocus', dir, { lastPoll: '2020-01-01T00:00:00Z' });
+  const runs = await until(async () => { const s = (await fetch(`${h.url}/api/v1/snapshot`).then(j)).result; return s.teams[0]?.issues.flatMap((i) => i.runs); });
+  const byKey = Object.fromEntries(runs.map((r) => [r.key, r]));
+  assert.equal(byKey['GH-1@impl'].workspaceOpen, true); assert.equal(byKey['GH-2@impl'].workspaceOpen, false);
+  const post = (body) => fetch(`${h.url}/api/v1/commands/run.focus`, { method: 'POST', headers: { 'content-type': 'application/json', origin: h.url }, body: JSON.stringify(body) }).then(j);
+  const focused = await post({ team: 'ffocus', run: 'GH-1@impl' });
+  assert.equal(focused.ok, true, JSON.stringify(focused.error)); assert.equal(focused.result.result.outcome, 'focused the agent');
+  const focuses = () => calls.filter((a) => a.includes('focus'));
+  assert.deepEqual(focuses(), [['agent', 'focus', 'gh-1-impl']], 'the run\'s own agent, by name');
+  // A run whose workspace is gone is refused before herdr is asked to focus anything.
+  const gone = await post({ team: 'ffocus', run: 'GH-2@impl' });
+  assert.equal(gone.ok, false); assert.equal(gone.error.code, 'conflict');
+  const none = await post({ team: 'ffocus', run: 'GH-3@impl' });
+  assert.equal(none.error.code, 'no_such_run');
+  assert.equal(focuses().length, 1);
+  // Only a caller on this machine: a Tailscale address is not loopback.
+  for (const a of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) assert.ok(isLoopback(a), a);
+  for (const a of ['100.101.102.103', '::ffff:100.64.0.1', '', undefined]) assert.ok(!isLoopback(a), String(a));
+});
+
+test('serve: a focus falls back to the workspace when the run\'s agent is not in it, and never touches a workspace herdr reused', async () => {
+  const calls = [];
+  const ws = { w1: { workspace_id: 'w1', label: 'GH-1 impl' }, w2: { workspace_id: 'w2', label: 'someone else' } };
+  class FakeHerdr extends Herdr {
+    async run(args) {
+      calls.push(args);
+      if (args[0] === 'workspace' && args[1] === 'get') return { result: { workspace: ws[args[2]] } };
+      if (args[0] === 'agent' && args[1] === 'get') { const e = new Error('gone'); e.code = 'agent_not_found'; throw e; }
+      return { result: {} };
+    }
+  }
+  const herdr = new FakeHerdr();
+  assert.equal(await herdr.focusWorkspaceOf('w1', { label: 'GH-1 impl', agentName: 'gh-1-impl' }), 'focused the workspace');
+  assert.match(await herdr.focusWorkspaceOf('w2', { label: 'GH-2 impl' }), /was reused by herdr for "someone else"/);
+  assert.deepEqual(calls.filter((a) => a.includes('focus')), [['workspace', 'focus', 'w1']]);
 });

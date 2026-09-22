@@ -43,7 +43,7 @@ reviewer's verdict as data. Do not derive either yourself.
 
 `POST /api/v1/commands/<name>` with the bodies in `packages/protocol/src/envelope.ts`:
 `task.done`, `task.undo`, `task.stop`, `task.reset`, `task.tail`, `run.exit`, `run.tail`,
-`team.tidy`. Always send a `requestId` you generated; resend the same one after a lost answer.
+`run.focus` (loopback only), `team.tidy`. Always send a `requestId` you generated; resend the same one after a lost answer.
 The response is the operation (poll `/api/v1/teams/<id>/operations/<opId>` until
 `completed`, `failed` or `partial`) and its result. A team whose owner is offline refuses every
 mutation with `owner_offline`; show that, do not retry in a loop.
