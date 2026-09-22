@@ -1,5 +1,7 @@
 // `weawr` (run), `weawr once`, `weawr dry-run`: the watcher itself. Running and polling once take
 // the team's ownership and answer on its socket; a dry run reads and touches nothing.
+import { PR_POLL_MS } from '@weawr/engine';
+import type { TeamEngine } from '@weawr/engine';
 import { createApplication, hostApplication, makeEngine, takeOwnership } from '../context.js';
 import type { Context } from '../context.js';
 import { updateReminder } from './update.js';
@@ -21,7 +23,7 @@ export async function watch(ctx: Context, tracker: any, mode: 'run' | 'once' | '
     await engine.resume();
     const r = await engine.pollOnce();
     ctx.ui.log(`${r.scanned} open issues scanned, ${r.candidates} matched, ${r.picked.length} picked`);
-    if (engine.supervising.size) { ctx.ui.log(`supervising ${engine.supervising.size} run(s); Ctrl-C when done`); await new Promise(() => {}); }
+    await untilSettled(engine, r.picked, (m) => ctx.ui.log(m));
     await ipc.close();
     ownership.release();
     return;
@@ -43,4 +45,32 @@ export async function watch(ctx: Context, tracker: any, mode: 'run' | 'once' | '
   ctx.herdr.endWaits?.();
   ctx.ui.log('stopped; the agents are left running');
   process.exit(0);
+}
+
+/**
+ * `once` after its poll: stay up while the runs it took are supervised and while the PRs they
+ * opened wait to be merged, then return. Merges are only seen by checkMerges(), which the watch
+ * loop calls on every poll and `once` polls only the once, so it is called here every PR_POLL_MS —
+ * and at once when a supervisor ends, because that run may just have opened a PR. Only the runs
+ * this process supervised are waited for: a PR an earlier watcher left open is not its business.
+ */
+async function untilSettled(engine: TeamEngine, picked: string[], log: (m: string) => void, stepMs = 1000): Promise<void> {
+  const mine = new Set<string>([...picked, ...engine.supervising]);
+  const awaitingMerge = () => [...mine].some((k) => engine.state.runs[k]?.status === 'awaiting_merge');
+  if (!engine.supervising.size && !awaitingMerge()) return;
+  log(`supervising ${engine.supervising.size} run(s), then waiting for the PRs they open to be merged; Ctrl-C to leave earlier`);
+  let nextCheck = awaitingMerge() ? 0 : Date.now() + PR_POLL_MS;
+  let supervised = engine.supervising.size;
+  for (;;) {
+    for (const k of engine.supervising) mine.add(k);
+    if (engine.supervising.size < supervised) nextCheck = 0;
+    supervised = engine.supervising.size;
+    if (!supervised && !awaitingMerge()) return;
+    if (Date.now() >= nextCheck) {
+      nextCheck = Date.now() + PR_POLL_MS;
+      try { await engine.checkMerges(); } catch (e: any) { log(`checking merges failed (will try again): ${e.message}`); }
+      continue;
+    }
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
 }

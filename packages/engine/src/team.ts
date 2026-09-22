@@ -108,7 +108,7 @@ export interface EngineOptions {
 /** How long one `herdr agent wait` may block before the supervisor re-reads result.json. */
 const RESULT_CHECK_MS = 60_000;
 /** How often the watcher may ask GitHub about the same pull request, whatever `pollSeconds` says. */
-const PR_POLL_MS = 60_000;
+export const PR_POLL_MS = 60_000;
 const sleep = (ms: number) => new Promise((r?: any) => setTimeout(r, ms));
 /** How long herdr is given to see the agent start on a brief, how many times the brief is offered, and the pause between. */
 const PROMPT_UPTAKE_MS = 20_000;

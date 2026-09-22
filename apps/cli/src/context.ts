@@ -61,6 +61,8 @@ export interface Context {
   userDir: string;
   ids: Identities;
   herdr: any;
+  /** For pull-request calls to GitHub; the global fetch unless a test hands in its own. */
+  fetchImpl?: typeof fetch;
   /** Load (or reload) the repository's config. Throws when there is none or it is invalid. Plugins must be loaded first (see plugins()). */
   config(): TeamConfig;
   /** The plugins the config names, loaded once per process. */
@@ -158,6 +160,7 @@ export function makeEngine(ctx: Context, { cfg, tracker, dry = false, ownership 
     store: storeFor(ctx, ownership),
     log: (line) => ctx.ui.print(line), live: (text) => ctx.ui.live(text),
     registration: register ? { dir: registrationsDir(ctx.userDir), socketPath: ctx.paths.socketPath, ownership } : null,
+    ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {}),
   });
 }
 

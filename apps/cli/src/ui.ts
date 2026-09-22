@@ -4,7 +4,7 @@ export const HELP = `weawr — watch an issue tracker (Linear or GitHub Issues);
 a git worktree and a herdr workspace, start a coding agent in it, brief it, and report back.
 
   weawr                   run the watcher (foreground; run it inside a herdr pane)
-  weawr once              one poll, then exit
+  weawr once              one poll; exits when its runs are done and their PRs merged
   weawr dry-run           show what would be picked up, touch nothing
   weawr match "<expr>"    evaluate an expression against live open issues
   weawr status            show tracked runs

@@ -1,5 +1,5 @@
 // @weawr/engine — the team: lifecycle, commands and observations, with injected dependencies.
-export { TeamEngine, PINNED_POLICY, defaultGit, policyOf, trackerBanner, watchLabel } from './team.js';
+export { TeamEngine, PINNED_POLICY, PR_POLL_MS, defaultGit, policyOf, trackerBanner, watchLabel } from './team.js';
 export type { EngineOptions, EngineHooks, GitRunner, RegistrationTarget } from './team.js';
 export { DEFAULTS, EVENTS, configStamp, expandConfigPath, loadConfig, loadEnvFiles, pluginSpecs, templateOrigin } from './config.js';
 export { EMPTY_REGISTRY, PLUGIN_API, loadPlugins, parseEvery, resolvePlugin } from './plugins.js';
