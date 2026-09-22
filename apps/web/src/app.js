@@ -75,7 +75,7 @@
   }
   // A run's result as a word: the raw status for the run that owns the PR, the model's reading for a reviewer (a report, not a decision).
   function verdict(r) { return r.result && r.ownsPr ? r.result.status.replace('_', ' ') : r.phrase; }
-  var SHORT = { blocked: 'blocked on a dialog', question: 'stopped to ask', merge: 'PR waits for your merge', needs_human: 'needs your decision', holding: 'still holding its workspace', stopped: 'stopped without a result', failed: 'failed', gone: 'agent gone', finished: 'finished, waiting for your sign-off' };
+  var SHORT = { blocked: 'blocked on a dialog', question: 'stopped to ask', merge: 'PR waits for your merge', needs_human: 'needs your decision', holding: 'still holding its workspace', stopped: 'stopped without a result', failed: 'failed', gone: 'agent gone', finished: 'finished, waiting for your sign-off', held: 'not started: the issue needs more detail' };
   function current() { if (!view || !chosen) return null; return teams().filter(function (f) { return f.id === chosen; })[0] || null; }
   function shown() { var f = current(); return f ? [f] : teams(); }
   function pct(a, b) { return a + b > 0 ? Math.round(a / (a + b) * 100) : null; }
@@ -144,6 +144,13 @@
     return '<div class="alert' + (b ? ' busy' : '') + '"><div class="k"><i class="led ' + esc(iss.light) + ' still"></i><b>' + esc(iss.key) + ' ' + esc(iss.title) + (many ? ' · ' + esc(f.name) : '') + '</b><span class="you' + (wait > 1000 ? '' : ' none') + '" title="time a person was waited on">' + (wait > 1000 ? dur(wait) : '0') + '<small>you</small></span></div>' +
       '<a class="open" href="#/i/' + esc(f.id) + '/' + encodeURIComponent(iss.key) + '">' + chips(iss) + stats(iss) + '</a><ul class="why">' + lines + '</ul>' + tail + '<div class="acts">' + acts + '</div>' + (b ? '<span class="craft"><i></i></span>' : '') + '</div>';
   }
+  // An issue the readiness gate did not start: no runs, so no task — its score, what it leaves out,
+  // and the issue to edit. It goes by itself once the issue is edited or picked up.
+  function heldCard(f, a, many) {
+    return '<div class="alert"><div class="k"><i class="led ' + esc(a.light) + ' still"></i><b>' + esc(a.issueKey) + ' ' + esc(a.title) + (many ? ' · ' + esc(f.name) : '') + '</b></div>' +
+      '<ul class="why"><li title="' + esc(a.text) + '"><i class="led ' + esc(a.light) + ' still"></i><b>gate</b> ' + esc(SHORT.held) + ' <small>' + dur(a.sinceMs + drift()) + '</small><span class="verdicts">' + esc(a.text) + '</span></li></ul>' +
+      '<div class="acts">' + (a.url ? '<a class="btn confirm" href="' + esc(a.url) + '" target="_blank" rel="noopener">Edit the issue</a>' : '') + '</div></div>';
+  }
   // The one action on a task: a person says it is done. Its agents are closed, their herdr
   // workspaces go with them, its alerts go, and it moves to output. `live` is the agents still
   // up, named so the confirm can say who goes; the workspaces still open are counted for the same.
@@ -198,13 +205,13 @@
     fs.forEach(function (x) {
       var byTask = {};
       x.alerts.forEach(function (a) { (byTask[a.issueKey] = byTask[a.issueKey] || []).push(a); });
-      Object.keys(byTask).forEach(function (k) { var iss = x.issues.filter(function (i) { return i.key === k; })[0]; if (iss) alerts.push([x, iss, byTask[k]]); });
+      Object.keys(byTask).forEach(function (k) { var iss = x.issues.filter(function (i) { return i.key === k; })[0]; if (iss) alerts.push([x, iss, byTask[k]]); else if (byTask[k][0].kind === 'held') alerts.push([x, null, byTask[k]]); });
       x.issues.forEach(function (i) { if (i.bucket === 'inflight') inflight.push([x, i]); else if (!byTask[i.key]) (i.bucket === 'merged' ? merged : done).push([x, i]); });
     });
     var body = '';
     if (!teams().length) body += '<div class="empty">No team has reported yet. Start a watcher with <b>weawr</b> in a repository, and it appears here on its first poll.</div>';
     else body += fs.map(teamCard).join('') + legend();
-    body += section('<i class="led ' + (alerts.length ? 'red' : '') + ' still"></i>Alerts', alerts.length, alerts.length ? '<div class="inset pane">' + alerts.map(function (p) { return taskCard(p[0], p[1], p[2], many); }).join('') + '</div>' : '<div class="inset pane"><div class="empty">Nothing needs you. The team is running by itself.</div></div>', { hot: alerts.length });
+    body += section('<i class="led ' + (alerts.length ? 'red' : '') + ' still"></i>Alerts', alerts.length, alerts.length ? '<div class="inset pane">' + alerts.map(function (p) { return p[1] ? taskCard(p[0], p[1], p[2], many) : heldCard(p[0], p[2][0], many); }).join('') + '</div>' : '<div class="inset pane"><div class="empty">Nothing needs you. The team is running by itself.</div></div>', { hot: alerts.length });
     body += section('Assembling', inflight.length, inflight.length ? '<div class="inset pane">' + inflight.map(function (p) { return row(p[0], p[1], many); }).join('') + '</div>' : '<div class="inset pane"><div class="empty">No issue in flight.</div></div>');
     var out = merged.concat(done);
     var today = out.filter(function (p) { return p[1].finishedAt && Date.now() - Date.parse(p[1].finishedAt) < 86400e3; });

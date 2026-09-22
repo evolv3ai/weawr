@@ -6,6 +6,7 @@
 import { verdictOf } from '@weawr/protocol';
 import * as _claim from './claim.mjs';
 import * as _herdr from './adapters/herdr.mjs';
+import { missingInWords } from './readiness.js';
 const { issueKeyOf } = _claim as Record<string, any>;
 const { isRunsWorkspace, workspaceOwner } = _herdr as Record<string, any>;
 
@@ -195,6 +196,9 @@ export function runState(run: any, agent: any, { othersLive = false, reviewer = 
  *   registry  the registry entry for this repo, or null
  *   seen      the caller's memory between ticks for settle(): pass the same object every tick,
  *             or nothing for a one-shot view that shows what herdr says right now
+ *   readiness the readiness gate's stored verdicts by issue key (`readiness:<KEY>` in the store)
+ *   openIssues the tracker's open issues as of the last poll, or null when unknown: a verdict is
+ *             only shown for an issue as it still stands
  */
 export interface HerdrIndex { agents: Map<string, any>; workspaces: Map<string, any>; panes: Map<string, any>; version: string | null; available: boolean }
 
@@ -202,9 +206,10 @@ export interface ProjectionInput {
   id: string; teamId?: string; repo: string; config?: any; state?: { runs: Record<string, any> }; events?: TimelineEvent[]; index?: HerdrIndex; sizes?: Record<string, any>;
   registry?: any; stale?: boolean; enrich?: { issues: Record<string, any>; prs: Record<string, any>; branches: Record<string, any> }; cleared?: Record<string, number>;
   seen?: Record<string, any> | null; settleMs?: number; now?: number; recipeRevision?: number | null; trackerScope?: string | null;
+  readiness?: Record<string, any>; openIssues?: Array<{ identifier: string; title?: string; url?: string | null; updatedAt?: string }> | null;
 }
 
-export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {} }, events = [], index = indexSnapshot(null), sizes = {}, registry = null, stale = false, enrich = { issues: {}, prs: {}, branches: {} }, cleared = {}, seen = null, settleMs = SETTLE_MS, now = Date.now(), recipeRevision = null, trackerScope = null }: ProjectionInput) {
+export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {} }, events = [], index = indexSnapshot(null), sizes = {}, registry = null, stale = false, enrich = { issues: {}, prs: {}, branches: {} }, cleared = {}, seen = null, settleMs = SETTLE_MS, now = Date.now(), recipeRevision = null, trackerScope = null, readiness = {}, openIssues = null }: ProjectionInput) {
   const name = config.name || registry?.name || repo.split('/').pop();
   const tracker = typeof config.tracker === 'object' ? config.tracker?.type : (config.tracker || registry?.tracker || 'linear');
   const rules = (config.rules || []).filter((r: any) => r.enabled !== false).map((r: any) => ({
@@ -363,7 +368,22 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
     const what = iss.merged ? `Merged${iss.prUrl ? ` #${iss.prUrl.split('/').pop()}` : ''}` : `Finished (${iss.phrase || r.result?.status || r.status})`;
     alerts.push({ ...alert('finished', iss, r, `${what}${reports ? `; ${reports}` : ''}. Look it over and mark it done.`, now), light: 'yellow', sinceMs: now - finishedAt, verdicts: reports || null });
   }
-  const weight: Record<string, number> = { blocked: 0, question: 1, needs_human: 2, merge: 3, stopped: 4, failed: 5, gone: 6, holding: 7, finished: 8 };
+  // An issue the readiness gate held back (team.ts readyToStart) has no run, so no card above; the
+  // reporter was asked on the issue, and this is where a person sees it too. Only while the verdict
+  // is for the issue as it stands: an edit changes `updatedAt` and a pickup gives it a run, and
+  // either ends it.
+  for (const issue of openIssues || []) {
+    const v = readiness[issue.identifier];
+    if (!v || v.ready !== false || typeof v.score !== 'number' || v.updatedAt !== issue.updatedAt || byIssue.has(issue.identifier)) continue;
+    const threshold = config.readiness?.threshold;
+    const since = Date.parse(v.at || '') || now;
+    alerts.push({
+      kind: 'held', issueKey: issue.identifier, title: issue.title || issue.identifier, runKey: null, role: null, agent: null, agentKind: null, workspaceId: null, prUrl: null, url: issue.url || null,
+      text: `Not started: readiness ${v.score.toFixed(2)}${typeof threshold === 'number' ? `, needs ${threshold}` : ''}. What it leaves out: ${missingInWords(v.missing)}. Edit the issue to say it.`,
+      sinceMs: now - since, light: 'yellow', score: v.score, missing: v.missing ?? null,
+    });
+  }
+  const weight: Record<string, number> = { blocked: 0, question: 1, needs_human: 2, merge: 3, stopped: 4, failed: 5, gone: 6, holding: 7, finished: 8, held: 9 };
   alerts.sort((a: any, b: any) => weight[a.kind] - weight[b.kind] || b.sinceMs - a.sinceMs);
   // What a person should do about a task, decided here so no client has to: the top-ranked alert.
   for (const iss of issues) iss.attention = alerts.find((a: any) => a.issueKey === iss.key)?.kind ?? null;

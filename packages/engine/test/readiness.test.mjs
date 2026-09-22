@@ -14,6 +14,7 @@ import { teamPaths } from '../dist/paths.js';
 import { TeamEngine } from '../dist/team.js';
 import { SqliteStore, storePath } from '../dist/store/sqlite.js';
 import { READINESS_URL, normalizeReadiness } from '../dist/readiness.js';
+import { validate, teamSnapshotSchema } from '@weawr/protocol';
 
 const PROMPTS = fileURLToPath(new URL('../../recipes/prompts', import.meta.url));
 const ISSUE = { id: 'i9', identifier: 'WTR-9', ref: 'WTR-9', title: 'Rename the thing to the new name', description: '', url: 'https://example.test/9', labels: ['ai'], comments: [], createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', project: null, team: null, assignee: null, assignees: [], state: { name: 'Todo', type: 'unstarted' } };
@@ -111,6 +112,26 @@ test('a vague issue gets one comment and its onBlocked state, and no pickup', as
   assert.match(tracker.comments[0], /Edit the issue .*then move it back to the queue/);
   assert.deepEqual(tracker.moves, ['Needs Info']);
   assert.equal(e.notes.length, 1, 'notified under onBlocked.notify');
+});
+
+test('a held issue is a "held" alert in the snapshot until it is edited and picked up', async () => {
+  // WTR-18: the console showed nothing for an issue the gate held; only the Linear comment did.
+  const dir = repo(CONFIG());
+  const tracker = fakeTracker(ISSUE);
+  const fetchImpl = fakeFetch([VAGUE, READY]);
+  const e = engine(dir, { tracker, fetchImpl });
+  e.herdr.run = async () => { throw new Error('no herdr here'); };
+  e.enricher = { view: () => ({ issues: {}, prs: {}, branches: {} }), refresh() {}, sources: {}, lastAskedAt: null, lastError: null };
+  await e.pollOnce();
+  const snap = await e.snapshot();
+  assert.ok(validate(teamSnapshotSchema, snap).ok, 'a held alert, with no run, is a valid snapshot');
+  const held = snap.alerts.filter((a) => a.kind === 'held');
+  assert.deepEqual(held.map((a) => [a.issueKey, a.score, a.missing, a.url]), [['WTR-9', 0.04, 'target_value', ISSUE.url]], 'shown from the poll that held it, after its own comment moved updatedAt');
+  e.invalidateSnapshot();
+  tracker.issue = { ...tracker.issue, description: 'Rename `weawr` to `weaver` in README.md.', updatedAt: '2026-01-02T00:00:00Z' };
+  await e.pollOnce();
+  assert.deepEqual(e.picked, ['WTR-9']);
+  assert.deepEqual((await e.snapshot()).alerts.filter((a) => a.kind === 'held'), [], 'edited and ready: no longer held');
 });
 
 test('an unchanged issue is not asked about again, not even after a restart', async () => {

@@ -215,7 +215,9 @@ as without the check. An issue that is not ready is not claimed and nothing is s
 under the rule's `onBlocked` policy, it gets one comment saying that weawr did not start an agent,
 what the issue leaves out (a value, name or format it refers to; which files are affected; how
 to tell when it is done), and to edit the issue and move it back to the queue. It is moved to
-`onBlocked.state` when that is set, and you are notified when `onBlocked.notify` is on.
+`onBlocked.state` when that is set, and you are notified when `onBlocked.notify` is on. The
+console shows it too, as a "held" alert with the score and what it leaves out and a link to the
+issue, until the issue is edited or picked up.
 
 The verdict is remembered per issue, with the issue's `updatedAt`, in the team's store. An issue
 nobody has touched is not asked about or commented on again, restarts included. An edited issue
