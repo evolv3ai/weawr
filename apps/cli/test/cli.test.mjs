@@ -276,3 +276,29 @@ test('the compiler\'s output finds its assets in the source tree, so the command
   assert.equal(r.status, 0, out);
   assert.match(out, /prompts\/default\.md \(bundled/, out);
 });
+
+test('--help or -h after a subcommand prints its usage and runs nothing', (t) => {
+  // Reproduced before the fix: `init --help` scaffolded .weawr/ and .env.example, `console --help`
+  // started the server (spawnSync would hit the timeout), `once -h` polled the tracker.
+  const dir = repo(t, { '.weawr/config.json': config() });
+  const before = fs.readdirSync(dir, { recursive: true }).sort();
+  for (const [args, usage] of [
+    [['init', '--help'], /^ {2}weawr init \[--tracker/m],
+    [['console', '--help'], /^ {2}weawr console set-passcode/m],
+    [['once', '-h'], /^ {2}weawr once {2,}one poll/m],
+    [['console', '--port', '0', '-h'], /^ {2}weawr console device add/m],
+  ]) {
+    const r = spawnSync(process.execPath, [BIN, ...args], { cwd: dir, encoding: 'utf8', timeout: 10_000, env: { ...process.env, WEAWR_NO_UPDATE_CHECK: '1', LINEAR_API_KEY: '' } });
+    assert.equal(r.status, 0, `${args.join(' ')}: ${r.stderr}`);
+    assert.match(r.stdout, usage, args.join(' '));
+    assert.doesNotMatch(r.stdout, /^ {2}weawr status/m, `${args.join(' ')} prints its own line(s), not the whole help`);
+  }
+  assert.deepEqual(fs.readdirSync(dir, { recursive: true }).sort(), before, 'no file was written');
+});
+
+test('a --help after -- is an argument to the command, not a request for help', (t) => {
+  const dir = repo(t, {});
+  const r = run(dir, ['status', '--', '--help']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /weawr init/);
+});
