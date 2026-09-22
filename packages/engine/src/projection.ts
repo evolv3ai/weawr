@@ -267,6 +267,8 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
       prUrl: run.prUrl || run.result?.prUrl || null, error: run.error || null,
       segments: segs, humanWaitMs: humanWaitMs(run, segs, now, { waiting: st.needsYou === 'merge', since: mergeWait?.from, until: mergeWait?.to || undefined }), evidence, size, waitingSince, mergeWait,
       recipeRevision: run.recipeRevision ?? null, attemptId: run.attemptId ?? null,
+      // What the idle check said the stopped agent is doing, when it was asked; see idle-check.ts.
+      idleKind: run.idleKind || null,
     };
   });
 
@@ -326,7 +328,7 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
     // flight: workspaces are kept for whoever reviews the PR. Once the task is over it is clutter.
     if (!why) { if (iss.bucket !== 'inflight' && r.agentAlive && (r.status === 'done' || r.status === 'merged') && r.agentStatus !== 'working') alerts.push(alert('holding', iss, r, `Finished (${r.result?.status || r.status}) and still holding workspace ${r.workspaceId || '?'}.`, now)); continue; }
     if (why === 'blocked') alerts.push(alert('blocked', iss, r, `Waiting for approval or input in workspace ${r.workspaceId || '?'}.`, now));
-    else if (why === 'question') alerts.push(alert('question', iss, r, `Stopped without a result and is probably asking a question in workspace ${r.workspaceId || '?'}.`, now));
+    else if (why === 'question') alerts.push(alert('question', iss, r, idleText(r.idleKind, r.workspaceId), now));
     else if (why === 'merge') {
       // The reviews are in; their verdicts are what the person merging wants to know.
       const reviews = iss.runs.filter((o: any) => o.key !== r.key && o.result).map((o: any) => `${o.role || o.rule} ${o.phrase}`).join(', ');
@@ -404,6 +406,15 @@ export function production(issues: any[], from: number, now = Date.now()): { fin
     }
   }
   return { finished, merged, workingMs, humanMs };
+}
+
+/** The alert for an agent that stopped without a result: what the idle check said, else the old guess. */
+function idleText(kind: string | null, workspaceId: string | null): string {
+  const ws = `workspace ${workspaceId || '?'}`;
+  if (kind === 'asking') return `Stopped without a result and is asking a question in ${ws}.`;
+  if (kind === 'errored') return `Stopped on an error without a result in ${ws}.`;
+  if (kind === 'finished') return `Seems finished but has not written its result; weawr asked it to, in ${ws}.`;
+  return `Stopped without a result and is probably asking a question in ${ws}.`;
 }
 
 function clip(s: any, n: number): string { s = String(s); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; }

@@ -50,6 +50,8 @@ import type { TeamSnapshot } from '@weawr/protocol';
 import { Enricher } from './enrich.js';
 import { READINESS_KEY_ENV, askReadiness, describeVerdict, missingInWords } from './readiness.js';
 import type { ReadinessVerdict } from './readiness.js';
+import { IDLE_CHECK_KEY_ENV, IDLE_TAIL_LINES, askIdle } from './idle-check.js';
+import type { IdleKind } from './idle-check.js';
 import { teamView, indexSnapshot, timelineOf } from './projection.js';
 import { trackerScope as scopeOf } from './identity.js';
 import * as _gitSize from './adapters/git-size.mjs';
@@ -1112,19 +1114,41 @@ export class TeamEngine {
         // An agent that never took its brief is not asking a question; it is waiting to be told.
         // Round again: the brief is offered every time it takes input.
         if (run.pendingPrompt) { await sleep(PROMPT_RETRY_MS); continue; }
-        // Claude finished a turn without writing result.json — probably asked a question in chat.
-        this.log(`${key}: ${st} without a result — probably asking a question in ${run.workspaceId}`);
+        // Claude finished a turn without writing result.json. Without the idle check (config
+        // "idleCheck") that is probably a question in chat; with it, the pane's tail says which.
+        // Classified once per stop: a restart that finds the stop already reported keeps its kind.
+        let kind: IdleKind | null = run.notified.idle ? (run.idleKind ?? null) : await this.classifyIdle(key, run);
+        // Told once this turn that it seems finished and still idle without a result: a question after all.
+        if (kind === 'finished' && run.notified.resultAsked) kind = 'asking';
+        if (kind === 'finished') {
+          run.idleKind = kind; run.notified.resultAsked = true; this.saveState();
+          this.log(`${key}: ${st} without a result — seems finished; asking it to write ${run.resultPath}`);
+          try {
+            await this.herdr.prompt(name, `You seem to be finished, but you have not written your result file at ${run.resultPath}. Write it now, as your brief says.`, { wait: true, until: ['working', 'blocked'], timeoutMs: PROMPT_UPTAKE_MS });
+            continue;
+          } catch (e: any) {
+            this.log(`${key}: the reminder to write its result did not reach the agent (${e.message}); reporting it`);
+            kind = 'asking';
+          }
+        }
+        run.idleKind = kind;
+        const what = kind === 'asking' ? 'asking a question' : kind === 'errored' ? 'stopped on an error' : 'probably asking a question';
+        this.log(`${key}: ${st} without a result — ${what} in ${run.workspaceId}`);
         this.emit('run.question', key, { workspaceId: run.workspaceId });
         if (!run.notified.idle) {
           run.notified.idle = true; this.saveState();
           const tail = await this.tail(name, 15);
-          await this.report(key, rule, rule.onIdle, coordinator(`💬 the \`${rule.role || rule.name}\` agent for ${key} stopped without a result and is probably asking a question. Answer it in herdr workspace \`${run.workspaceId}\`.${tail}`), 'request');
+          const agent = `the \`${rule.role || rule.name}\` agent for ${key}`;
+          const body = kind === 'errored'
+            ? `🛑 ${agent} stopped on an error without a result. Look at it in herdr workspace \`${run.workspaceId}\`.${tail}`
+            : `💬 ${agent} stopped without a result and is ${what}. Answer it in herdr workspace \`${run.workspaceId}\`.${tail}`;
+          await this.report(key, rule, rule.onIdle, coordinator(body), 'request');
           await this.markWaiting(key, run, rule.onIdle);
         }
         await this.herdr.waitAgent(name, { until: ['working'], timeoutMs: 6 * 3600e3 });
         this.log(`${key}: working again`);
         this.emit('run.working', key, { after: 'question' });
-        run.notified.idle = false;
+        run.notified.idle = false; run.idleKind = null;
         await this.markWorking(key, run, rule);
         continue;
       }
@@ -1135,9 +1159,35 @@ export class TeamEngine {
 
   async tail(name?: any, lines?: any) {
     try {
-      const text = (await this.herdr.readAgent(name, lines + 20)).trim().split('\n').filter((l?: any) => l.trim()).slice(-lines).join('\n');
+      const text = await this.paneLines(name, lines);
       return text ? `\n\n\`\`\`\n${text}\n\`\`\`` : '';
     } catch { return ''; }
+  }
+
+  /** The last `lines` non-empty lines of an agent's pane. */
+  async paneLines(name: string, lines: number): Promise<string> {
+    return (await this.herdr.readAgent(name, lines + 20)).trim().split('\n').filter((l?: any) => l.trim()).slice(-lines).join('\n');
+  }
+
+  /**
+   * The idle check (config "idleCheck"; see idle-check.ts): what an agent that stopped without a
+   * result is doing, from its pane's tail. Null when the check is off, has no key, or failed — the
+   * caller then reports the stop as it always has.
+   */
+  async classifyIdle(key: string, run: any): Promise<IdleKind | null> {
+    const config = this.cfg.idleCheck;
+    if (!config) return null;
+    const apiKey = this.env[IDLE_CHECK_KEY_ENV];
+    if (!apiKey) { this.warnOnce('idleCheck:no-key', `idle check is configured but ${IDLE_CHECK_KEY_ENV} is not set (environment or .env.local); idle agents are reported without it`); return null; }
+    try {
+      const paneTail = await this.paneLines(run.agentName, IDLE_TAIL_LINES);
+      const verdict = await askIdle({ paneTail, issueTitle: String(run.title ?? ''), config, apiKey, fetchImpl: this.fetchImpl });
+      this.log(`${key}: idle check: ${verdict.kind}${verdict.confidence === null ? '' : ` (${verdict.confidence.toFixed(2)})`}`);
+      return verdict.kind;
+    } catch (e: any) {
+      this.log(`${key}: idle check failed (${e.name === 'TimeoutError' ? 'timed out' : e.message}); reporting it without it`);
+      return null;
+    }
   }
 
   async finalize(key?: any, result?: any, rule?: any) {
@@ -1685,6 +1735,9 @@ export class TeamEngine {
     const readiness = this.cfg.readiness;
     if (readiness && !this.env[READINESS_KEY_ENV]) this.warnOnce('readiness:no-key', `  readiness check: configured, but ${READINESS_KEY_ENV} is not set (environment or .env.local); issues are picked up without it`);
     else if (readiness) this.log(`  readiness check: ${readiness.model}, pick up at ${readiness.threshold} or above`);
+    const idleCheck = this.cfg.idleCheck;
+    if (idleCheck && !this.env[IDLE_CHECK_KEY_ENV]) this.warnOnce('idleCheck:no-key', `  idle check: configured, but ${IDLE_CHECK_KEY_ENV} is not set (environment or .env.local); idle agents are reported without it`);
+    else if (idleCheck) this.log(`  idle check: ${idleCheck.model}`);
     if (this.cfg.localOverrides.length) this.log(`  overrides from ${path.basename(this.paths.localConfigPath)}: ${this.cfg.localOverrides.join(', ')}`);
   }
 
