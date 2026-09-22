@@ -22,6 +22,8 @@ const CHAT = /^Chat about this\.?$/i;
 const DESCRIPTION = /^\s{3,}\S/;
 /** The dialog's tab bar: "☐ Tagline", or "← ☐ Tagline  ✔ Submit →" when it asks more than one thing. */
 const TAB = /[☐☒☑✔✓]/;
+/** The border in front of each line of a question that wraps: "│ options are …". */
+const QUESTION_BORDER = /^│\s?/;
 
 /** The question dialog at the bottom of `paneText`, or null when its last lines are not one. */
 export function parseQuestionDialog(paneText: string): QuestionDialog | null {
@@ -57,12 +59,17 @@ export function parseQuestionDialog(paneText: string): QuestionDialog | null {
   }
   if (!options.length && typeOption === null) return null;
 
-  // Above the options: the question, and above that the header in the dialog's tab bar.
+  // Above the options: the question, and above that the header in the dialog's tab bar. A long
+  // question wraps over several lines, each behind a "│" border; they run up to the tab bar, or to
+  // a blank or rule line.
   let q = first - 1;
   while (q >= 0 && !lines[q].trim()) q--;
   if (q < 0 || RULE.test(lines[q]) || TAB.test(lines[q])) return null;
-  const question = lines[q].trim();
-  const above = q > 0 ? lines[q - 1] : '';
+  let top = q;
+  while (top > 0 && lines[top - 1].trim() && !RULE.test(lines[top - 1]) && !TAB.test(lines[top - 1])) top--;
+  const question = lines.slice(top, q + 1).map((l) => l.trim().replace(QUESTION_BORDER, '').trim()).filter(Boolean).join(' ');
+  if (!question) return null;
+  const above = top > 0 ? lines[top - 1] : '';
   const header = TAB.test(above) ? above.replace(/[☐☒☑✔✓←→]/g, ' ').replace(/\s+/g, ' ').trim() || null : null;
   return { header, question, options, typeOption };
 }
