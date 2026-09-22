@@ -168,6 +168,7 @@ export function createHandler({ gate, hub, hostname = os.hostname(), log = () =>
       case 'task.reset': targets.push([b.team, { type: 'run.reset', key: b.task, requestId: scopedId }]); break;
       case 'task.tail': targets.push([b.team, { type: 'task.tail', issueKey: b.task, lines: b.lines }]); break;
       case 'run.exit': targets.push([b.team, { type: 'run.exit', runKey: b.run, requestId: scopedId }]); break;
+      case 'run.answer': targets.push([b.team, { type: 'run.answer', runKey: b.run, option: b.option ?? null, text: b.text ?? null, requestId: scopedId, by }]); break;
       case 'run.tail': targets.push([b.team, { type: 'agent.tail', runKey: b.run, lines: b.lines }]); break;
       case 'run.focus': {
         // herdr is on this machine: focusing a pane means something only to a person sitting at it.
@@ -184,7 +185,7 @@ export function createHandler({ gate, hub, hostname = os.hostname(), log = () =>
     if (!targets.length) return { ok: true, result: { operation: null, result: { outcomes: [] } } };
     if (targets.length === 1) {
       const [fid, cmd] = targets[0];
-      const r = await hub.dispatch(fid, cmd);
+      const r = cmd.type === 'run.answer' ? await hub.answerRun(fid, cmd.runKey, { option: cmd.option, text: cmd.text }, { requestId: cmd.requestId, by: cmd.by }) : await hub.dispatch(fid, cmd);
       if (!r.ok) return r;
       const res: any = r.result;
       const op: OperationView | null = res?.operationId ? await operationView(fid, res.operationId) : null;

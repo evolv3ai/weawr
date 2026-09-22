@@ -29,6 +29,7 @@ export type Command =
   | { type: 'task.stop'; issueKey: string; requestId?: string }
   | { type: 'task.tail'; issueKey: string; lines?: number }
   | { type: 'run.exit'; runKey: string; requestId?: string }
+  | { type: 'run.answer'; runKey: string; option?: number | null; text?: string | null; requestId?: string; by?: string }
   | { type: 'team.tidy'; requestId?: string }
   | { type: 'events.after'; cursor: number; limit?: number }
   | { type: 'ping' };
@@ -137,6 +138,15 @@ export function createApplication(engine: TeamEngine): Application {
     async 'run.exit'({ runKey, requestId }) {
       return serialized(issueKeyOf(runKey), () => operation(`team:${engine.ids.teamId}`, requestId, 'run.exit', { runKey }, () => exitRun(engine, runKey)))
         .then(({ result, operation: op, replayed }) => ({ ...(result as object), operationId: op?.id ?? null, replayed }));
+    },
+    async 'run.answer'({ runKey, option = null, text = null, requestId, by = 'console' }) {
+      // A dialog that is not there, not this one, or not answerable that way is refused, not recorded as done.
+      const codes: Record<string, string> = { no_such_run: 'no_such_run', no_dialog: 'conflict', changed: 'conflict', no_such_option: 'bad_request', failed: 'herdr_unavailable' };
+      return serialized(issueKeyOf(runKey), () => operation(`team:${engine.ids.teamId}`, requestId, 'run.answer', { runKey, option, text }, async () => {
+        const r = await engine.answerDialog(runKey, { option, text }, { by });
+        if (r.outcome !== 'sent') throw new ApplicationError(codes[r.outcome], r.message);
+        return { outcome: r.outcome, label: r.label };
+      })).then(({ result, operation: op, replayed }) => ({ ...(result as object), operationId: op?.id ?? null, replayed }));
     },
     async 'team.tidy'({ requestId }) {
       return operation(`team:${engine.ids.teamId}`, requestId, 'team.tidy', {}, () => tidy(engine))

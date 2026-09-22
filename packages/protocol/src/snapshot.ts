@@ -59,6 +59,14 @@ export const runViewSchema = s.object({
   settling: s.maybe(s.string()),
   /** Why the run is settled — its issue closed or canceled, its PR closed or merged — or null. A settled run raises no alert. */
   settled: s.maybe(s.string()),
+  /** The question dialog the run is blocked on, as it was parsed from the pane; null when it is not blocked on one. Answered with `run.answer`. */
+  dialog: s.maybe(s.object({
+    header: s.maybe(s.string()),
+    question: s.string(),
+    options: s.array(s.object({ n: s.number(), label: s.string(), description: s.string() })),
+    /** The number of the "Type something." option, which takes a free-text answer; null without one. */
+    typeOption: s.maybe(s.number()),
+  })),
   result: s.maybe(s.object({ status: s.string(), prUrl: s.maybe(s.string()), summary: s.string(), notes: s.string(), live: s.boolean(), verdict: s.maybe(s.string()), verdictSource: s.maybe(s.string()), verdictHead: s.maybe(s.string()) })),
   prUrl: s.maybe(s.string()),
   error: s.maybe(s.string()),

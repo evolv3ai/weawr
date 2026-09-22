@@ -704,22 +704,73 @@ export class TeamEngine {
       const answer = dialogKeys(dialog, pick, config.threshold, c.body);
       const settle = () => { run.relayedUpTo = c.createdAt; this.saveState(); };
       if (!answer) { this.log(`${key}: ${c.author}'s comment picks no option and the dialog takes no text; left for a person`); settle(); continue; }
-      let now: QuestionDialog | null = null;
-      try { now = parseQuestionDialog(await this.paneLines(run.agentName, 40)); } catch (e: any) { this.log(`${key}: could not read the pane (${e.message})`); }
-      if (now?.question !== dialog.question) { this.log(`${key}: the question dialog is no longer on the pane; ${c.author}'s answer is not typed in`); settle(); return; }
-      try {
-        await this.herdr.sendKeys(run.paneId, ...answer.keys);
-        if (answer.text !== null) { await this.herdr.sendText(run.paneId, answer.text); await this.herdr.sendKeys(run.paneId, 'Enter'); }
-      } catch (e: any) {
-        this.log(`${key}: the answer did not reach the agent (${e.message}); will try again`);
-        return;
-      }
+      const pressed = await this.pressDialog(key, run, dialog, answer);
+      if (pressed.outcome === 'changed') { this.log(`${key}: the question dialog is no longer on the pane; ${c.author}'s answer is not typed in`); settle(); return; }
+      if (pressed.outcome === 'failed') { this.log(`${key}: the answer did not reach the agent (${pressed.error}); will try again`); return; }
       settle();
-      this.commit(() => { this.emit('run.reply_relayed', key, { authors: [c.author], count: 1, option: answer.label }); });
-      this.log(`${key}: answered the question dialog with ${answer.label} from ${c.author}'s comment`);
-      await this.report(key, this.ruleFor(run), { comment: true }, coordinator(`↪️ relayed ${c.author}'s answer (${answer.label}) to the agent in workspace \`${run.workspaceId}\``));
+      await this.dialogAnswered(key, run, c.author, answer.label, `${c.author}'s comment`);
       return;
     }
+  }
+
+  /**
+   * Press an answer into a run's question dialog — an option's number, or the type option's number
+   * and then the text — after reading the pane again: a dialog that has changed or gone since it was
+   * asked (`dialog`) is not typed into. Says what happened; the caller decides what that means.
+   */
+  async pressDialog(key: string, run: any, dialog: QuestionDialog, answer: { keys: string[]; text: string | null }): Promise<{ outcome: 'sent' | 'changed' | 'failed'; error?: string }> {
+    let now: QuestionDialog | null = null;
+    try { now = parseQuestionDialog(await this.paneLines(run.agentName, 40)); } catch (e: any) { this.log(`${key}: could not read the pane (${e.message})`); }
+    if (now?.question !== dialog.question) return { outcome: 'changed' };
+    try {
+      await this.herdr.sendKeys(run.paneId, ...answer.keys);
+      if (answer.text !== null) { await this.herdr.sendText(run.paneId, answer.text); await this.herdr.sendKeys(run.paneId, 'Enter'); }
+    } catch (e: any) {
+      return { outcome: 'failed', error: e.message };
+    }
+    return { outcome: 'sent' };
+  }
+
+  /** After a dialog was answered: the event, the log line, and the "↪️ relayed" note on the issue naming who answered. */
+  async dialogAnswered(key: string, run: any, who: string, label: string, from: string) {
+    this.commit(() => { this.emit('run.reply_relayed', key, { authors: [who], count: 1, option: label }); });
+    this.log(`${key}: answered the question dialog with ${label} from ${from}`);
+    await this.report(key, this.ruleFor(run), { comment: true }, coordinator(`↪️ relayed ${who}'s answer (${label}) to the agent in workspace \`${run.workspaceId}\``));
+  }
+
+  /**
+   * Answer a run's question dialog from the console: press one of its options, or type text into
+   * its "Type something." option. The same press as a reply on the issue (pressDialog): a dialog
+   * that changed on the pane is not typed into, and the issue gets the same "↪️ relayed" note, with
+   * `by` (the console, or a device by name) as the one who answered. Refusals are outcomes, not throws.
+   */
+  async answerDialog(key: string, { option = null, text = null }: { option?: number | null; text?: string | null }, { by = 'console' }: { by?: string } = {}):
+    Promise<{ outcome: 'sent' | 'no_such_run' | 'no_dialog' | 'no_such_option' | 'changed' | 'failed'; label: string | null; message: string }> {
+    const run = this.state.runs[key];
+    if (!run) return { outcome: 'no_such_run', label: null, message: `no run ${key}` };
+    if (!awaitingDialogReply(run)) return { outcome: 'no_dialog', label: null, message: `${key} is not waiting on a question dialog` };
+    const dialog: QuestionDialog = run.askedDialog;
+    let answer: { keys: string[]; text: string | null; label: string } | null = null;
+    if (option !== null) {
+      const o = dialog.options.find((x) => x.n === option);
+      if (!o) return { outcome: 'no_such_option', label: null, message: `the dialog has no option ${option}; it offers ${dialog.options.map((x) => x.n).join(', ') || 'none'}` };
+      answer = { keys: [String(o.n)], text: null, label: o.label };
+    } else {
+      answer = dialogKeys(dialog, { option: null, confidence: null }, 1, text ?? '');
+      if (!answer) return { outcome: 'no_such_option', label: null, message: dialog.typeOption === null ? 'the dialog takes no text; pick one of its options' : 'the answer is empty' };
+    }
+    const who = by === 'console' ? 'the console' : by;
+    const pressed = await this.pressDialog(key, run, dialog, answer);
+    if (pressed.outcome === 'changed') {
+      this.log(`${key}: the question dialog is no longer on the pane; ${who}'s answer is not typed in`);
+      return { outcome: 'changed', label: answer.label, message: `the question dialog on ${key}'s pane has changed or gone; nothing was typed in` };
+    }
+    if (pressed.outcome === 'failed') {
+      this.log(`${key}: the answer did not reach the agent (${pressed.error})`);
+      return { outcome: 'failed', label: answer.label, message: `the answer did not reach the agent: ${pressed.error}` };
+    }
+    await this.dialogAnswered(key, run, who, answer.label, who);
+    return { outcome: 'sent', label: answer.label, message: `answered with ${answer.label}` };
   }
 
   /** Tell the reporter the issue was not started and why, under the rule's onBlocked policy. */

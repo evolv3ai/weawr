@@ -119,3 +119,27 @@ test('a run whose herdr workspace is open gets a "Focus in herdr" button; a run 
     assert.equal(renderPage({ hash, snapshot, hostname: '100.101.102.103' }).includes('data-focus'), false, `${hash}: not from another machine`);
   }
 });
+
+test('a run blocked on a question dialog shows the question, a button per option and a box for "Type something." on its card and its detail; a team whose owner is away cannot answer', () => {
+  const dialog = { header: 'Tagline', question: 'Which tagline?', options: [{ n: 1, label: 'Scratch <repo>', description: 'for trying' }, { n: 2, label: 'Trial issues', description: '' }], typeOption: 3 };
+  const run = (key, role, over) => ({ key, role, rule: role, pass: 1, status: 'running', ownsPr: role === 'impl', agent: `a-${role}`, agentKind: 'claude', agentStatus: 'blocked', agentAlive: true, workspaceId: null, workspaceLabel: null, workspaceOpen: false, branch: null, worktree: null, startedAt: '2026-09-08T10:00:00Z', finishedAt: null, elapsedMs: 60000, light: 'red', phrase: 'blocked on a dialog', needsYou: 'blocked', settling: null, settled: null, dialog: null, result: null, prUrl: null, error: null, segments: [], humanWaitMs: 0, evidence: 'events', size: null, waitingSince: null, ...over });
+  const issue = { key: 'GH-7', title: 'Seven', url: 'https://x/7', bucket: 'inflight', light: 'red', phrase: 'blocked on a dialog', startedAt: '2026-09-08T10:00:00Z', finishedAt: null, elapsedMs: 60000, humanWaitMs: 0, cleared: false, prUrl: null, prState: null, issueState: 'open', size: null,
+    slots: [{ role: 'impl', light: 'red', phrase: 'blocked on a dialog' }], runs: [run('GH-7@impl', 'impl', { dialog })] };
+  const week = { finished: 0, merged: 0, workingMs: 0, humanMs: 0 };
+  const team = (status, over = {}) => ({ teamId: 'fx', id: 'app', name: 'app', repo: '/nowhere', tracker: 'github', owner: { status }, watcher: { version: '0', lastPoll: null, stale: false, workspaceId: null, pid: 1 }, counts: { running: 1, working: 0, alerts: 1, inflight: 1, merged: 0, done: 0 }, humanWaitMs: 0,
+    roles: ['impl'], rules: [{ name: 'impl', role: 'impl', match: 'label:ai', agent: 'claude', model: null, effort: null, basedOn: null, passes: 1, maxConcurrent: 2 }], maxConcurrent: 3, pollSeconds: 30, production: { today: week, week, month: week }, live: { tracker: true, github: true, why: null },
+    alerts: [{ issueKey: 'GH-7', kind: 'blocked', light: 'red', role: 'impl', text: 'blocked', sinceMs: 1000 }], issues: [issue], ...over });
+  const snapshot = (status) => ({ protocolVersion: 1, hostname: 'fixture', version: '0', herdr: { connected: true, version: '9' }, generatedAt: new Date().toISOString(), teams: [team(status)] });
+  for (const hash of ['#/f/app', '#/i/app/GH-7']) {
+    const html = renderPage({ hash, snapshot: snapshot('online'), hostname: '100.101.102.103' });
+    assert.match(html, /impl asks · Tagline<\/small>Which tagline\?/, hash);
+    assert.deepEqual([...html.matchAll(/data-answer="([^"]+)"[^>]*>([^<]+)</g)].map((m) => [m[1], m[2]]), [['app|GH-7@impl|1', '1. Scratch &lt;repo&gt;'], ['app|GH-7@impl|2', '2. Trial issues']], `${hash}: a button per option, escaped, from any machine`);
+    assert.match(html, /<input data-answer-text="app\|GH-7@impl"/);
+    assert.match(html, /data-answer-send="app\|GH-7@impl"/);
+    assert.doesNotMatch(html, /data-answer="[^"]*\|3"/, 'the type option is the box, not a button');
+    const away = renderPage({ hash, snapshot: snapshot('offline') });
+    assert.match(away, /data-answer="app\|GH-7@impl\|1" disabled/, `${hash}: nobody to press it with the owner away`);
+  }
+  const noType = snapshot('online'); noType.teams[0].issues[0].runs[0].dialog = { ...dialog, typeOption: null };
+  assert.doesNotMatch(renderPage({ hash: '#/f/app', snapshot: noType }), /data-answer-text/);
+});

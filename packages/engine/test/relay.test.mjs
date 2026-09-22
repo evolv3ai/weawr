@@ -383,3 +383,55 @@ test('one answer per dialog: a second comment waits for the next one', async () 
   assert.deepEqual(herdr.keys, [{ paneId: 'p1', keys: ['1'] }]);
   assert.equal(e.state.runs['GH-7'].relayedUpTo, at(5));
 });
+
+// --- Answering a dialog from the console --------------------------------------------------------
+
+test('the console presses an option through the same path: that digit, and the relayed note names the console', async () => {
+  const logs = [];
+  const { e, herdr, tracker, fetchImpl } = setup({ run: onDialog(), pane: DIALOG_PANE, relayReplies: null, logs });
+  const r = await e.answerDialog('GH-7', { option: 2 }, { by: 'console' });
+  assert.deepEqual(r, { outcome: 'sent', label: '(B) Trial issues', message: 'answered with (B) Trial issues' });
+  assert.deepEqual(herdr.keys, [{ paneId: 'p1', keys: ['2'] }]);
+  assert.equal(fetchImpl.calls.length, 0, 'no Jev: a button is not a guess');
+  assert.equal(tracker.comments.length, 1);
+  assert.match(tracker.comments[0], /↪️ \*\*Weawr Coordinator\*\* — relayed the console's answer \(\(B\) Trial issues\) to the agent in workspace `w1`/);
+  assert.ok(logs.some((l) => /answered the question dialog with \(B\) Trial issues from the console/.test(l)));
+});
+
+test('free text from the console picks the type option and types it in, on one line; a device is named as itself', async () => {
+  const { e, herdr, tracker } = setup({ run: onDialog(), pane: DIALOG_PANE });
+  const r = await e.answerDialog('GH-7', { text: '  Neither —\nuse "sandbox". ' }, { by: 'device phone' });
+  assert.equal(r.outcome, 'sent');
+  assert.deepEqual(herdr.keys, [{ paneId: 'p1', keys: ['3'] }, { paneId: 'p1', text: 'Neither — use "sandbox".' }, { paneId: 'p1', keys: ['Enter'] }]);
+  assert.match(tracker.comments[0], /relayed device phone's answer \(typed in\)/);
+});
+
+test('a dialog that changed on the pane gets nothing from the console, and the issue is not told', async () => {
+  const other = DIALOG_PANE.replace('Which tagline should go on the line after the title in README.md?', 'Which licence?');
+  for (const pane of [other, 'claude is working…']) {
+    const { e, herdr, tracker } = setup({ run: onDialog(), pane });
+    const r = await e.answerDialog('GH-7', { option: 1 });
+    assert.equal(r.outcome, 'changed');
+    assert.match(r.message, /has changed or gone; nothing was typed in/);
+    assert.equal(herdr.keys.length, 0);
+    assert.equal(tracker.comments.length, 0);
+  }
+});
+
+test('the console is refused an option the dialog does not have, text a dialog does not take, and a run not behind a dialog', async () => {
+  const { e, herdr } = setup({ run: onDialog({ ...DIALOG, typeOption: null }), pane: NO_TYPE_PANE });
+  assert.equal((await e.answerDialog('GH-7', { option: 3 })).outcome, 'no_such_option', 'the type option is not a button');
+  assert.equal((await e.answerDialog('GH-7', { text: 'mine' })).outcome, 'no_such_option');
+  assert.equal((await e.answerDialog('GH-9', { option: 1 })).outcome, 'no_such_run');
+  const idle = setup({});
+  assert.equal((await idle.e.answerDialog('GH-7', { option: 1 })).outcome, 'no_dialog');
+  assert.equal(herdr.keys.length + idle.herdr.keys.length, 0);
+});
+
+test('the snapshot shows the dialog a run is blocked on, and none for a run that is not', async () => {
+  const { e } = setup({ run: onDialog(), pane: DIALOG_PANE });
+  const snap = await e.snapshot();
+  assert.deepEqual(snap.issues[0].runs[0].dialog, DIALOG);
+  const idle = setup({});
+  assert.equal((await idle.e.snapshot()).issues[0].runs[0].dialog, null);
+});

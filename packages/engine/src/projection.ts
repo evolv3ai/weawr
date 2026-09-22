@@ -7,6 +7,7 @@ import { verdictOf } from '@weawr/protocol';
 import * as _claim from './claim.mjs';
 import * as _herdr from './adapters/herdr.mjs';
 import { missingInWords } from './readiness.js';
+import { awaitingDialogReply } from './relay.js';
 const { issueKeyOf } = _claim as Record<string, any>;
 const { isRunsWorkspace, workspaceOwner } = _herdr as Record<string, any>;
 
@@ -284,6 +285,8 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
       idleKind: run.idleKind || null,
       // Why the run is settled (its issue or PR closed), or null: a settled run raises no alert.
       settled: run.settled?.why || null,
+      // The question dialog it is blocked on, while it is: what the console answers with run.answer.
+      dialog: awaitingDialogReply(run) ? run.askedDialog : null,
     };
   });
 
