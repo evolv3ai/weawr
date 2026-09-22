@@ -123,6 +123,9 @@ The same fields work on every tracker; what they map to on GitHub is in
   "readiness": null,          // before a new pickup, ask whether the issue says what to change, e.g.
                               // { "threshold": 0.5, "model": "jev-latest" }. null (or absent) = off. See
                               // "Checking an issue is ready" below
+  "idleCheck": null,          // when an agent stops without a result, ask whether it is asking, finished or
+                              // errored before reporting it, e.g. { "model": "jev-latest" }. null (or absent)
+                              // = off. See "What an idle agent is doing" below
   "defaults": {               // every rule inherits these
     "worktree": "self",       // who creates the git worktree the run works in.
                               // "self":  weawr does, with one `git worktree add` on the branch below.
@@ -217,6 +220,35 @@ moved back to the queue has a new `updatedAt` and gets a fresh verdict. When the
 HTTP error, no answer within 10 seconds, a response without a score), the failure is logged and
 the issue is picked up as before. `weawr dry-run` shows each verdict (ready or not, the score and
 what is missing) and posts nothing.
+
+## What an idle agent is doing
+
+An agent that stops without writing its result file is reported under the rule's `onIdle` policy
+as "probably asking a question". Often it is not: it finished and forgot the result file, or it
+stopped on an error. With `idleCheck` set, the watcher first sends the last 40 non-empty lines of
+the agent's pane and the issue title to TypeSafe's Jev model, asks which of these it shows, and
+acts on the answer:
+
+```jsonc
+"idleCheck": {
+  "model": "jev-latest"   // default
+}
+```
+
+- **asking** (a question to a person, or waiting for a decision): reported as today, but the
+  comment says it *is* asking a question, and the issue moves to `onIdle.state`.
+- **finished** (it says the work is done, e.g. a PR is open, but is idle): nobody is pinged. The
+  agent is told once per turn that it has not written its result file and to write it now. If it
+  stops again without one, that stop is reported as asking a question.
+- **errored** (an API error, a crash, a failed command it gave up on): reported as stopped on an
+  error, with the pane's tail, and the issue moves to `onIdle.state`.
+- **other**, or the call failed (an HTTP error, no answer within 10 seconds, a response without a
+  known answer): reported exactly as without the check.
+
+The key is `TYPESAFE_API_KEY`, as for `readiness`. With `idleCheck` set and no key, the watcher
+says so once and reports idle agents as before. The check runs only while supervising an agent;
+`weawr dry-run` does not use it. The console's alert for the stopped agent says what the check
+said.
 
 ## Prompt templates
 
