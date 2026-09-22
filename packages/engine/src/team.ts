@@ -50,6 +50,7 @@ import type { TeamSnapshot } from '@weawr/protocol';
 import { Enricher } from './enrich.js';
 import { READINESS_KEY_ENV, askReadiness, describeVerdict, missingInWords } from './readiness.js';
 import type { ReadinessVerdict } from './readiness.js';
+import { RELAY_KEY_ENV, askRelay, awaitingReply, newReplies, relayPrompt } from './relay.js';
 import { IDLE_CHECK_KEY_ENV, IDLE_TAIL_LINES, askIdle } from './idle-check.js';
 import type { IdleKind } from './idle-check.js';
 import { teamView, indexSnapshot, timelineOf } from './projection.js';
@@ -510,6 +511,7 @@ export class TeamEngine {
     const since = new Date(this.clock().getTime() - this.cfg.lookbackDays * 86400e3).toISOString();
     const viewer = await this.tracker.me();
     const issues = await this.tracker.openIssues({ sinceIso: since });
+    if (!this.dry) await this.relayReplies(issues);
     const ctx = { viewer, now: this.clock().getTime() };
     const candidates = pickCandidates({
       issues, rules: this.cfg.rules, viewer,
@@ -570,6 +572,62 @@ export class TeamEngine {
     try { const fresh = await this.tracker.issueByKey(issueKey); if (fresh?.updatedAt) this.rememberReadiness(issueKey, { ...record, updatedAt: fresh.updatedAt }); }
     catch { /* the next poll may ask once more; the verdict will be the same */ }
     return false;
+  }
+
+  /**
+   * Relay replies (config "relayReplies"; see relay.ts): for each run waiting on a question, the
+   * comments on its issue since it asked are put to Jev, and those that answer it — or all of them,
+   * when the call fails — are typed into its pane in one prompt, oldest first. Every comment looked
+   * at moves `run.relayedUpTo` past it, so none is considered twice, restarts included.
+   */
+  async relayReplies(issues: any[]) {
+    const config = this.cfg.relayReplies;
+    if (!config) return;
+    const waiting = Object.entries(this.state.runs).filter(([, run]) => awaitingReply(run));
+    if (!waiting.length) return;
+    const apiKey = this.env[RELAY_KEY_ENV];
+    if (!apiKey) { this.warnOnce('relayReplies:no-key', `reply relay is configured but ${RELAY_KEY_ENV} is not set (environment or .env.local); replies on the issue are not passed to waiting agents`); return; }
+    for (const [key, run] of waiting) {
+      try { await this.relayRepliesTo(key, run, issues, apiKey); }
+      catch (e: any) { this.log(`${key}: replies not relayed: ${e.message}`); }
+    }
+  }
+
+  async relayRepliesTo(key: string, run: any, issues: any[], apiKey: string) {
+    const config = this.cfg.relayReplies!;
+    const issueKey = run.issueKey || issueKeyOf(key);
+    const issue = issues.find((i?: any) => i.identifier === issueKey) ?? await this.tracker.issueByKey(issueKey);
+    const fresh = newReplies(issue?.comments || [], run);
+    if (!fresh.length) return;
+    const relay: any[] = [];
+    // How far the comments that were decided on without needing the pane reach: a failed prompt
+    // leaves the ones it was carrying to be tried again.
+    let settled: string | null = null;
+    for (const c of fresh) {
+      let answers = true;
+      try {
+        const v = await askRelay({ question: run.askedTail || '', comment: c.body, config, apiKey, fetchImpl: this.fetchImpl });
+        answers = v.answers;
+        this.log(`${key}: ${c.author}'s comment ${answers ? 'answers' : 'does not answer'} the question (${v.score.toFixed(2)} ${answers ? '≥' : '<'} ${config.threshold})`);
+      } catch (e: any) {
+        this.log(`${key}: reply check failed (${e.name === 'TimeoutError' ? 'timed out' : e.message}); relaying ${c.author}'s comment anyway`);
+      }
+      if (answers) relay.push(c);
+      else if (!relay.length) settled = c.createdAt;
+    }
+    if (!relay.length) { run.relayedUpTo = fresh.at(-1)!.createdAt; this.saveState(); return; }
+    try {
+      await this.herdr.prompt(run.agentName, relayPrompt(issueKey, relay), { wait: true, until: ['working', 'blocked'], timeoutMs: PROMPT_UPTAKE_MS });
+    } catch (e: any) {
+      this.log(`${key}: the reply did not reach the agent (${e.message}); will try again`);
+      if (settled) { run.relayedUpTo = settled; this.saveState(); }
+      return;
+    }
+    run.relayedUpTo = fresh.at(-1)!.createdAt;
+    this.commit(() => { this.saveState(); this.emit('run.reply_relayed', key, { authors: relay.map((c) => c.author), count: relay.length }); });
+    this.log(`${key}: relayed ${relay.length} repl${relay.length === 1 ? 'y' : 'ies'} to the agent`);
+    const who = [...new Set(relay.map((c) => c.author))].join(', ');
+    await this.report(key, this.ruleFor(run), { comment: true }, coordinator(`↪️ relayed ${who}'s reply to the agent in workspace \`${run.workspaceId}\``));
   }
 
   /** Tell the reporter the issue was not started and why, under the rule's onBlocked policy. */
@@ -1136,8 +1194,12 @@ export class TeamEngine {
         this.log(`${key}: ${st} without a result — ${what} in ${run.workspaceId}`);
         this.emit('run.question', key, { workspaceId: run.workspaceId });
         if (!run.notified.idle) {
-          run.notified.idle = true; this.saveState();
-          const tail = await this.tail(name, 15);
+          // When it asked, and what: a reply on the issue after this is relayed to it (relayReplies).
+          run.notified.idle = true; run.askedAt = this.clock().toISOString(); this.saveState();
+          let pane = '';
+          try { pane = await this.paneLines(name, 15); } catch { /* reported without the tail */ }
+          run.askedTail = pane; this.saveState();
+          const tail = pane ? `\n\n\`\`\`\n${pane}\n\`\`\`` : '';
           const agent = `the \`${rule.role || rule.name}\` agent for ${key}`;
           const body = kind === 'errored'
             ? `🛑 ${agent} stopped on an error without a result. Look at it in herdr workspace \`${run.workspaceId}\`.${tail}`
@@ -1738,6 +1800,9 @@ export class TeamEngine {
     const idleCheck = this.cfg.idleCheck;
     if (idleCheck && !this.env[IDLE_CHECK_KEY_ENV]) this.warnOnce('idleCheck:no-key', `  idle check: configured, but ${IDLE_CHECK_KEY_ENV} is not set (environment or .env.local); idle agents are reported without it`);
     else if (idleCheck) this.log(`  idle check: ${idleCheck.model}`);
+    const relay = this.cfg.relayReplies;
+    if (relay && !this.env[RELAY_KEY_ENV]) this.warnOnce('relayReplies:no-key', `  reply relay: configured, but ${RELAY_KEY_ENV} is not set (environment or .env.local); replies on the issue are not passed to waiting agents`);
+    else if (relay) this.log(`  reply relay: ${relay.model}, type a reply in at ${relay.threshold} or above`);
     if (this.cfg.localOverrides.length) this.log(`  overrides from ${path.basename(this.paths.localConfigPath)}: ${this.cfg.localOverrides.join(', ')}`);
   }
 

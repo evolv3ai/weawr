@@ -16,6 +16,8 @@ import { normalizeReadiness } from './readiness.js';
 import type { ReadinessConfig } from './readiness.js';
 import { normalizeIdleCheck } from './idle-check.js';
 import type { IdleCheckConfig } from './idle-check.js';
+import { normalizeRelay } from './relay.js';
+import type { RelayConfig } from './relay.js';
 
 export type EventPolicy = Record<string, any>;
 
@@ -64,6 +66,8 @@ export interface TeamConfig {
   readiness: ReadinessConfig | null;
   /** Ask TypeSafe's Jev what an agent that stopped without a result is doing; null (off) unless configured. See idle-check.ts. */
   idleCheck: IdleCheckConfig | null;
+  /** Type a person's reply on the issue into the pane of an agent waiting on a question; null (off) unless configured. See relay.ts. */
+  relayReplies: RelayConfig | null;
   defaults: Record<string, any>;
   rules: Rule[];
   localOverrides: string[];
@@ -101,6 +105,9 @@ export const DEFAULTS = {
   // When an agent stops without a result, ask TypeSafe's Jev whether it is asking, finished or
   // errored before reporting it: { "model": "jev-latest" }. null is off. The key is TYPESAFE_API_KEY.
   idleCheck: null as Record<string, unknown> | null,
+  // While an agent waits on a question, type a person's reply comment on the issue into its pane when
+  // TypeSafe's Jev says it answers the question: { "threshold": 0.5, "model": "jev-latest" }. null is off.
+  relayReplies: null as Record<string, unknown> | null,
   defaults: {
     worktree: 'self',                 // who creates the worktree: "self" (weawr), "herdr", or "none" (run in this checkout)
     worktreeDir: '.weawr/worktrees',  // where "self" puts them, relative to the repo (gitignored)
@@ -202,6 +209,7 @@ export function loadConfig(sources: ConfigSources): TeamConfig {
   cfg.maxNudges = normalizeMaxNudges(cfg.maxNudges, path.relative(paths.repo, paths.configPath));
   cfg.readiness = normalizeReadiness(cfg.readiness);
   cfg.idleCheck = normalizeIdleCheck(cfg.idleCheck);
+  cfg.relayReplies = normalizeRelay(cfg.relayReplies);
   const plugins = sources.plugins ?? EMPTY_REGISTRY;
   cfg.trackerSpec = trackerSpec(cfg.tracker);
   // A tracker from a plugin, else a built-in one; an id nobody provides names the plugin problem when there is one.
