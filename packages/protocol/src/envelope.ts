@@ -69,6 +69,8 @@ export const commandSchemas = {
   'task.reset': s.object({ team: key, task: key, requestId }, { extra: 'refuse' }),
   'run.exit': s.object({ team: key, run: key, requestId }, { extra: 'refuse' }),
   'run.tail': s.object({ team: key, run: key, lines: s.maybe(s.number({ integer: true, min: 1, max: 2000 })) }, { extra: 'refuse' }),
+  /** Bring the run's pane to the front of herdr on this machine. Answered by the host, from loopback only. */
+  'run.focus': s.object({ team: key, run: key }, { extra: 'refuse' }),
   'team.tidy': s.object({ team: s.maybe(key), requestId }, { extra: 'refuse' }),
 } as const;
 export type ClientCommandName = keyof typeof commandSchemas;

@@ -94,6 +94,27 @@ export class Herdr {
     return 'closed';
   }
 
+  /**
+   * Bring a run's pane to the front of herdr: its agent's pane when the agent is up in the run's
+   * workspace (`agent focus`, which selects the workspace, the tab and the pane), else the
+   * workspace itself. Like closeWorkspaceOf(), only when the workspace herdr has under that id is
+   * still the run's — a reused id is somebody else's, and focusing it would show the wrong agent.
+   * Returns 'focused the agent', 'focused the workspace', 'was already closed', or
+   * `was reused by herdr for "<label>"`; throws only when herdr refuses the focus itself.
+   */
+  async focusWorkspaceOf(workspaceId, owner = {}) {
+    const ws = await this.workspaceGet(workspaceId);
+    if (!ws) return 'was already closed';
+    const agent = owner.agentName ? await this.agentGet(owner.agentName).catch(() => null) : null;
+    if (!isRunsWorkspace(ws, owner, agent)) return `was reused by herdr for "${ws.label || workspaceId}"`;
+    if (agent && agent.workspace_id === (ws.workspace_id || workspaceId)) {
+      await this.run(['agent', 'focus', owner.agentName]);
+      return 'focused the agent';
+    }
+    await this.run(['workspace', 'focus', workspaceId]);
+    return 'focused the workspace';
+  }
+
   async renameWorkspace(workspaceId, label) {
     return this.run(['workspace', 'rename', workspaceId, label]);
   }

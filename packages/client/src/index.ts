@@ -110,6 +110,8 @@ export class WeawrClient {
   taskStop(team: string, task: string, opts: { requestId?: string } = {}) { return this.command<{ outcomes: unknown[] }>('task.stop', { team, task, ...opts }); }
   taskReset(team: string, task: string, opts: { requestId?: string } = {}) { return this.command<{ forgot: string[] }>('task.reset', { team, task, ...opts }); }
   runExit(team: string, run: string, opts: { requestId?: string } = {}) { return this.command<{ outcome: string }>('run.exit', { team, run, ...opts }); }
+  /** Bring a run's pane to the front of herdr. Only a caller on the host's own machine (loopback) may. */
+  runFocus(team: string, run: string) { return this.command<{ outcome: string }>('run.focus', { team, run }); }
   tidy(team: string | null = null, opts: { requestId?: string } = {}) { return this.command<{ outcomes: unknown[] }>('team.tidy', { ...(team ? { team } : {}), ...opts }); }
 
   /**

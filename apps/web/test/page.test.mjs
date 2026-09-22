@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { validate, hostSnapshotSchema } from '@weawr/protocol';
 
 const DIST = fileURLToPath(new URL('../dist/', import.meta.url));
@@ -82,4 +83,39 @@ test('the page never declares a function and a variable under one name (the belt
   const vars = new Set([...src.matchAll(/^\s*var\s+([A-Za-z_$][\w$]*)\s*=/gm)].map((m) => m[1]));
   const both = [...fns].filter((n) => vars.has(n));
   assert.deepEqual(both, [], `declared as both a function and a var: ${both.join(', ')}`);
+});
+
+// The page itself, run in a sandbox with just enough of a browser to render: a stub client hands
+// it a snapshot, and what it draws is read back from the root's innerHTML.
+function renderPage({ hostname = '127.0.0.1', hash = '', snapshot }) {
+  const el = () => ({ innerHTML: '', dataset: {}, addEventListener() {}, setAttribute() {}, getAttribute() { return null; } });
+  const root = el();
+  const body = { dataset: { hostname: 'fixture', theme: 'factorio', gated: 'false' }, appendChild() {} };
+  let handlers = null;
+  class WeawrClient { subscribe(h) { handlers = h; } }
+  const sandbox = { WeawrClient, document: { getElementById: (id) => (id === 'app' ? root : null), body, createElement: el }, location: { hash, hostname, search: '' }, localStorage: { getItem() { return null; }, setItem() {} }, setInterval() {}, setTimeout() {}, console };
+  sandbox.window = sandbox; sandbox.addEventListener = () => {};
+  vm.runInNewContext(fs.readFileSync(path.join(DIST, 'app.js'), 'utf8'), sandbox);
+  handlers.onStatus({ connected: true });
+  handlers.onSnapshot(snapshot);
+  return root.innerHTML;
+}
+
+test('a run whose herdr workspace is open gets a "Focus in herdr" button; a run without one, and a page opened from another machine, get none', () => {
+  const run = (key, role, over) => ({ key, role, rule: role, pass: 1, status: 'running', ownsPr: role === 'impl', agent: `a-${role}`, agentKind: 'claude', agentStatus: 'idle', agentAlive: true, workspaceId: null, workspaceLabel: null, workspaceOpen: false, branch: null, worktree: null, startedAt: '2026-09-08T10:00:00Z', finishedAt: null, elapsedMs: 60000, light: 'yellow', phrase: 'working', needsYou: null, settling: null, settled: null, result: null, prUrl: null, error: null, segments: [], humanWaitMs: 0, evidence: 'events', size: null, waitingSince: null, ...over });
+  const issue = { key: 'GH-7', title: 'Seven', url: 'https://x/7', bucket: 'inflight', light: 'yellow', phrase: 'working', startedAt: '2026-09-08T10:00:00Z', finishedAt: null, elapsedMs: 60000, humanWaitMs: 0, cleared: false, prUrl: null, prState: null, issueState: 'open', size: null,
+    slots: [{ role: 'impl', light: 'yellow', phrase: 'working' }, { role: 'review', light: 'yellow', phrase: 'working' }],
+    runs: [run('GH-7@impl', 'impl', { workspaceId: 'w1', workspaceLabel: 'GH-7 impl', workspaceOpen: true }), run('GH-7@review', 'review', { workspaceId: 'w2', workspaceOpen: false })] };
+  const week = { finished: 0, merged: 0, workingMs: 0, humanMs: 0 };
+  const team = { teamId: 'fx', id: 'app', name: 'app', repo: '/nowhere', tracker: 'github', owner: { status: 'online' }, watcher: { version: '0', lastPoll: null, stale: false, workspaceId: null, pid: 1 }, counts: { running: 1, working: 1, alerts: 1, inflight: 1, merged: 0, done: 0 }, humanWaitMs: 0,
+    roles: ['impl', 'review'], rules: [{ name: 'impl', role: 'impl', match: 'label:ai', agent: 'claude', model: null, effort: null, basedOn: null, passes: 1, maxConcurrent: 2 }], maxConcurrent: 3, pollSeconds: 30, production: { today: week, week, month: week }, live: { tracker: true, github: true, why: null },
+    alerts: [{ issueKey: 'GH-7', kind: 'question', light: 'yellow', role: 'impl', text: 'asks', sinceMs: 1000 }], issues: [issue] };
+  const snapshot = { protocolVersion: 1, hostname: 'fixture', version: '0', herdr: { connected: true, version: '9' }, generatedAt: new Date().toISOString(), teams: [team] };
+  for (const hash of ['#/f/app', '#/i/app/GH-7']) {
+    const html = renderPage({ hash, snapshot });
+    const focus = [...html.matchAll(/data-focus="([^"]+)"/g)].map((m) => m[1]);
+    assert.deepEqual([...new Set(focus)], ['app|GH-7@impl'], `${hash}: only the run with an open workspace`);
+    assert.match(html, />Focus in herdr</);
+    assert.equal(renderPage({ hash, snapshot, hostname: '100.101.102.103' }).includes('data-focus'), false, `${hash}: not from another machine`);
+  }
 });

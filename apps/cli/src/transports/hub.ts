@@ -136,6 +136,25 @@ export class TeamHub {
   }
 
   /**
+   * Bring one run's pane to the front of herdr on this machine. The host has herdr, so it answers
+   * this itself, owner or not: the run's workspace and agent as the team's snapshot has them, and
+   * the adapter checks the workspace under that id is still the run's before it focuses anything.
+   */
+  async focusRun(teamId: string, runKey: string): Promise<CommandResult> {
+    const e = this.team(teamId);
+    if (!e) return { ok: false, error: { code: 'not_found', message: `no team ${teamId} on this host` } };
+    const run = e.snapshot?.issues.flatMap((i) => i.runs).find((r) => r.key === runKey);
+    if (!run) return { ok: false, error: { code: 'no_such_run', message: `no run ${runKey}` } };
+    if (!run.workspaceId || !run.workspaceOpen) return { ok: false, error: { code: 'conflict', message: `${runKey} has no herdr workspace open` } };
+    try {
+      const outcome = await this.herdr.focusWorkspaceOf(run.workspaceId, { label: run.workspaceLabel ?? null, repo: e.repo, agentName: run.agentAlive ? run.agent ?? null : null });
+      return /^focused/.test(outcome) ? { ok: true, result: { outcome, workspaceId: run.workspaceId } } : { ok: false, error: { code: 'conflict', message: `${runKey}'s workspace ${run.workspaceId} ${outcome}` } };
+    } catch (err: any) {
+      return { ok: false, error: { code: 'herdr_unavailable', message: err.message } };
+    }
+  }
+
+  /**
    * A command for one team: to its owner over the private socket. With no owner, reads that
    * herdr alone can answer (a tail) are answered here; every mutation is refused as owner_offline.
    */
