@@ -422,3 +422,30 @@ test('a task carries its attention and its verdicts as data, decided by the proj
   assert.equal(t.runs[1].result.verdict, 'approved'); assert.equal(t.runs[1].result.verdictSource, 'structured'); assert.equal(t.runs[1].result.verdictHead, 'abc1234');
   assert.equal(t.runs[0].result.verdict, null);
 });
+
+test('a settled run — its issue canceled, its PR closed — raises no alert; an open one still does', () => {
+  // WTR-17: on the trial, runs whose Linear issues were Canceled still said "needs you", and runs
+  // whose PRs were closed still said "PR open". The watcher marks such a run settled (team.ts).
+  const runs = {
+    'GH-1': { rule: 'ai', status: 'done', issueKey: 'GH-1', title: 'asks', startedAt: iso(9, 0), finishedAt: iso(9, 30), agentName: 'gh-1', result: { status: 'needs_human', summary: 'Which way?' } },
+    'GH-2': { rule: 'ai', status: 'done', issueKey: 'GH-2', title: 'pr', startedAt: iso(9, 0), finishedAt: iso(9, 30), agentName: 'gh-2', prUrl: 'https://github.com/o/r/pull/2', result: { status: 'pr_open', prUrl: 'https://github.com/o/r/pull/2' } },
+  };
+  const open = teamView({ id: 'x', repo: '/r', config: CONFIG, state: { runs }, now: T(10, 0) });
+  assert.deepEqual(open.alerts.map((a) => [a.kind, a.issueKey]), [['needs_human', 'GH-1'], ['finished', 'GH-2']], 'while their issues and PRs are open, both are a person\'s');
+  const settled = {
+    'GH-1': { ...runs['GH-1'], settled: { why: 'issue_canceled', at: iso(9, 45) } },
+    'GH-2': { ...runs['GH-2'], settled: { why: 'pr_closed', at: iso(9, 45) } },
+  };
+  const v = teamView({ id: 'x', repo: '/r', config: CONFIG, state: { runs: settled }, now: T(10, 0) });
+  assert.deepEqual(v.alerts, []);
+  assert.deepEqual(v.issues.map((i) => i.attention), [null, null]);
+  const byKey = Object.fromEntries(v.issues.map((i) => [i.key, i.runs[0]]));
+  assert.deepEqual([byKey['GH-1'].phrase, byKey['GH-1'].needsYou, byKey['GH-1'].settled], ['issue canceled', null, 'issue_canceled']);
+  assert.deepEqual([byKey['GH-2'].phrase, byKey['GH-2'].light, byKey['GH-2'].settled], ['PR closed', 'grey', 'pr_closed']);
+  // one settled beside one open: only the open one is an alert
+  const mixed = teamView({ id: 'x', repo: '/r', config: CONFIG, state: { runs: { ...runs, 'GH-2': settled['GH-2'] } }, now: T(10, 0) });
+  assert.deepEqual(mixed.alerts.map((a) => [a.kind, a.issueKey]), [['needs_human', 'GH-1']]);
+  // a failed run whose issue was canceled is not an alert either, and a live one is described as usual
+  assert.equal(runState({ status: 'failed', settled: { why: 'issue_canceled' } }, null).needsYou, null);
+  assert.equal(runState({ status: 'running', settled: { why: 'issue_canceled' } }, null).needsYou, 'gone');
+});

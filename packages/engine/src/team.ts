@@ -111,6 +111,8 @@ export interface EngineOptions {
 const RESULT_CHECK_MS = 60_000;
 /** How often the watcher may ask GitHub about the same pull request, whatever `pollSeconds` says. */
 export const PR_POLL_MS = 60_000;
+/** How often a finished run's issue, missing from the open list, may be looked up to see whether it was closed. */
+export const ISSUE_POLL_MS = 10 * 60_000;
 const sleep = (ms: number) => new Promise((r?: any) => setTimeout(r, ms));
 /** How long herdr is given to see the agent start on a brief, how many times the brief is offered, and the pause between. */
 const PROMPT_UPTAKE_MS = 20_000;
@@ -513,7 +515,7 @@ export class TeamEngine {
     const since = new Date(this.clock().getTime() - this.cfg.lookbackDays * 86400e3).toISOString();
     const viewer = await this.tracker.me();
     const issues = await this.tracker.openIssues({ sinceIso: since });
-    if (!this.dry) await this.relayReplies(issues);
+    if (!this.dry) { await this.relayReplies(issues); await this.settleClosedIssues(issues); }
     const ctx = { viewer, now: this.clock().getTime() };
     const candidates = pickCandidates({
       issues, rules: this.cfg.rules, viewer,
@@ -534,6 +536,42 @@ export class TeamEngine {
       catch (e: any) { this.log(`pickup ${c.key} failed: ${e.message}`); }
     }
     return { scanned: issues.length, candidates: candidates.length, picked, waiting };
+  }
+
+  /**
+   * A run whose issue is no longer open — completed or canceled — is settled: the console stops
+   * asking a person about it (projection.ts), though state.json keeps it until `weawr reset`. The
+   * open list only reaches back `lookbackDays`, so an issue missing from it is looked up before
+   * anything is concluded, at most once per ISSUE_POLL_MS. A live run is left to finish first.
+   */
+  async settleClosedIssues(issues: any[]) {
+    const open = new Set(issues.map((i: any) => i.identifier));
+    const now = this.clock().getTime();
+    const looked = new Map<string, any>();
+    for (const [key, run] of Object.entries<any>(this.state.runs)) {
+      if (run.settled || run.status === 'running' || run.status === 'starting' || this.reserved.has(key)) continue;
+      const issueKey = run.issueKey || issueKeyOf(key);
+      if (open.has(issueKey)) continue;
+      if (run.issueCheckedAt && now - Date.parse(run.issueCheckedAt) < ISSUE_POLL_MS) continue;
+      if (!looked.has(issueKey)) {
+        try { looked.set(issueKey, await this.tracker.issueByKey(issueKey)); }
+        catch (e: any) { this.warnOnce(`issue:${issueKey}:${e.message}`, `${key}: cannot read ${issueKey}, so its closing cannot be seen: ${e.message}`); looked.set(issueKey, undefined); }
+      }
+      const issue = looked.get(issueKey);
+      if (issue === undefined) continue;
+      run.issueCheckedAt = this.clock().toISOString();
+      const type = issue?.state?.type;
+      if (type !== 'completed' && type !== 'canceled') { this.saveState(); continue; }
+      this.settle(key, run, type === 'canceled' ? 'issue_canceled' : 'issue_completed');
+    }
+  }
+
+  /** Mark a run settled (see settleClosedIssues): nothing about it is a person's to act on any more. */
+  settle(key: string, run: any, why: string) {
+    if (run.settled) return;
+    run.settled = { why, at: this.clock().toISOString() };
+    this.commit(() => { this.saveState(); this.emit('run.settled', key, { why }); });
+    this.log(`${key}: settled (${why.replace('_', ' ')}); the console no longer alerts on it`);
   }
 
   /**
@@ -1588,6 +1626,7 @@ export class TeamEngine {
       if (pr.state === 'closed') {
         run.status = 'done'; run.finishedAt ||= this.clock().toISOString(); this.commit(() => { this.saveState(); this.emit('run.pr_closed', key, { prUrl: run.prUrl }); });
         this.log(`${key}: ${run.prUrl} was closed without merging; leaving workspace ${run.workspaceId} and the worktree alone`);
+        this.settle(key, run, 'pr_closed');
         continue;
       }
       run.mergedAt = pr.mergedAt || this.clock().toISOString();
@@ -1598,6 +1637,7 @@ export class TeamEngine {
       this.freshenCheckout(key);
       const did = await this.shutdown(key, run, rule);
       run.status = 'merged'; run.finishedAt = this.clock().toISOString(); this.commit(() => { this.saveState(); this.emit('run.closed', key, { did }); });
+      this.settle(key, run, 'pr_merged');
       // The notification only carries the first line, and with nothing switched on the thing you
       // need from it is what is still standing — so that goes first and the URL follows.
       const lines = did.length
