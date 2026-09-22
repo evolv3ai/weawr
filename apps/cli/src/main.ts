@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createContext, makeTracker } from './context.js';
-import { HELP, terminal } from './ui.js';
+import { HELP, commandHelp, terminal } from './ui.js';
 import { init } from './commands/init.js';
 import { auth } from './commands/auth.js';
 import { reset, status } from './commands/status.js';
@@ -26,6 +26,11 @@ process.removeAllListeners('warning');
 process.on('warning', (w) => { if (w.name === 'ExperimentalWarning' && /SQLite/.test(w.message)) return; console.error(`${w.name}: ${w.message}`); });
 
 export async function main(argv: string[]): Promise<void> {
+  // `weawr <cmd> --help` (or -h, anywhere before a `--`) asks about the command; it must not run it, nor
+  // build the context (which reads the user's directory) first.
+  const args = argv.slice(1, argv.includes('--') ? argv.indexOf('--') : undefined);
+  const usage = argv[0] && (args.includes('--help') || args.includes('-h')) ? commandHelp(argv[0]) : undefined;
+  if (usage) { console.log(usage); return; }
   const ctx = createContext({ ui: terminal() });
   if (argv[0] === '--version' || argv[0] === '-V' || argv[0] === 'version') { console.log(ctx.version); return; }
   if (argv[0] === 'update' || argv[0] === 'upgrade') return update(ctx, argv.slice(1));

@@ -39,6 +39,15 @@ Run it from inside the git repository it should work on. Everything is project-l
   ~/.config/weawr/teams/           one registration per team running on this machine (per user)
 `;
 
+/** A subcommand's own line(s) from HELP (`weawr console` has several), or undefined if HELP has none.
+ *  `run` is the bare `weawr` line; aliases resolve to the command they stand for. */
+export function commandHelp(cmd: string): string | undefined {
+  const name = ({ upgrade: 'update', version: '--version', '-V': '--version' } as Record<string, string>)[cmd] ?? cmd;
+  const lead = name === 'run' ? '  weawr  ' : `  weawr ${name} `;
+  const lines = HELP.split('\n').filter((l) => `${l} `.startsWith(lead));
+  return lines.length ? lines.join('\n') : undefined;
+}
+
 export function ts(d = new Date()): string { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
 
 export interface Ui {
