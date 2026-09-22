@@ -126,6 +126,9 @@ The same fields work on every tracker; what they map to on GitHub is in
   "idleCheck": null,          // when an agent stops without a result, ask whether it is asking, finished or
                               // errored before reporting it, e.g. { "model": "jev-latest" }. null (or absent)
                               // = off. See "What an idle agent is doing" below
+  "relayReplies": null,       // while an agent waits on a question, type a person's reply comment on the issue
+                              // into its pane, e.g. { "threshold": 0.5, "model": "jev-latest" }. null (or
+                              // absent) = off. See "Answering an agent from the issue" below
   "defaults": {               // every rule inherits these
     "worktree": "self",       // who creates the git worktree the run works in.
                               // "self":  weawr does, with one `git worktree add` on the branch below.
@@ -249,6 +252,41 @@ The key is `TYPESAFE_API_KEY`, as for `readiness`. With `idleCheck` set and no k
 says so once and reports idle agents as before. The check runs only while supervising an agent;
 `weawr dry-run` does not use it. The console's alert for the stopped agent says what the check
 said.
+
+## Answering an agent from the issue
+
+An agent that stops to ask a question is reported on its issue under the rule's `onIdle` policy,
+and the issue moves to `onIdle.state`. Without `relayReplies`, the answer has to be typed into the
+agent's herdr pane. With it, a person can answer as a comment on the issue:
+
+```jsonc
+"relayReplies": {
+  "threshold": 0.5,       // type a comment in when its answers-the-question score (0–1) is at least this; default 0.5
+  "model": "jev-latest"   // default
+}
+```
+
+On every poll, for each run waiting on a question, the watcher reads the issue's comments made
+since the agent asked. weawr's own comments are left out: they are recognised by the
+coordinator's byline or a role's `**weawr**` byline, not by author, since on Linear they are
+written with your token. Each remaining comment goes to TypeSafe's Jev model with the pane lines
+the question was reported with, asking whether the comment answers what the agent asked:
+
+- **at or above `threshold`**, or the call failed (an HTTP error, no answer within 10 seconds, a
+  response without a score; a comment on an issue waiting on a question is most likely the
+  answer): the comment is typed into the agent's pane as "Reply on `<KEY>` from `<author>` in the
+  tracker:", its text, then "Carry on with the task." Several such comments go in one prompt,
+  oldest first. The issue gets one coordinator comment, "↪️ relayed `<author>`'s reply to the
+  agent in workspace `<id>`", and when the agent starts working again the issue moves back to the
+  pickup state as it would after an answer in the pane.
+- **below `threshold`**: logged and left for you to act on.
+
+Each comment is looked at once: the last one considered is remembered with the run, restarts
+included. If the reply cannot be typed in (herdr did not see the agent take it), it is tried again
+on the next poll. Nothing is typed into an agent that is behind a permission dialog, and with
+`idleCheck` on, only into one the check called `asking`. The key is `TYPESAFE_API_KEY`, as for
+`readiness`; with `relayReplies` set and no key, the watcher says so once and relays nothing.
+`weawr dry-run` does not relay.
 
 ## Prompt templates
 
