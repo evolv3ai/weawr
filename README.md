@@ -174,7 +174,7 @@ the [configuration reference](docs/configuration.md#the-rule-language).
 | command | what it does |
 |---|---|
 | `weawr` | **the watcher.** Evaluates your rules every `pollSeconds`, picks up matches, supervises them. Config edits are picked up live, no restart. |
-| `weawr once` | one poll, then exit (stays up while it supervises what it took) |
+| `weawr once` | one poll, then exit (stays up while it supervises what it took, and until the PRs those runs opened are merged) |
 | `weawr dry-run` | print what would be picked up, change nothing |
 | `weawr match "<expr>"` | evaluate an ad hoc expression against open issues, change nothing |
 | `weawr status` | tracked runs, their outcome, and each live agent's state |

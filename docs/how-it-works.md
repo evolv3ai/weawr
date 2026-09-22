@@ -115,7 +115,10 @@ the issue to move — capped per issue by `maxNudges`, after which a person is a
    run is recorded as `merged`. Nothing is torn down unless you asked for it in `onMerged` — see
    below. A PR **closed without merging** just stops being watched. While it is open, the same
    once-a-minute read also notices when it has drifted into **conflicts** with its base — see
-   [Keeping up with `main`](#keeping-up-with-main).
+   [Keeping up with `main`](#keeping-up-with-main). `weawr once` watches too: after its one poll
+   it stays up while it supervises the runs it started and until the PRs they opened are merged or
+   closed, then exits. A PR an earlier watcher left open is not waited for; the next `weawr` or
+   `weawr once` picks it up.
 
 If you restart the watcher, it re-attaches to agents that are still alive, finalizes any run whose
 result file appeared while it was down, and goes on watching the pull requests it had not seen
