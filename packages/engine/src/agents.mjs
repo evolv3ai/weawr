@@ -13,6 +13,8 @@
 // Anything without a profile still runs. It gets the generic one (`--model`, and whatever the rule
 // puts in `agentArgs`), because weawr knowing every agent's flags is not a thing to depend on
 // — and herdr, not this file, is the authority on which kinds exist.
+import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * `permissionMode` is Claude Code's word, and it is the one the config has always used. Each
@@ -88,4 +90,39 @@ export function describeAgent(rule) {
  */
 export function agentArgv({ kind = 'claude', name = null, permissionMode = null, model = null, effort = null, extra = [] } = {}) {
   return [...profileFor(kind).argv({ name, permissionMode, model, effort }), ...(extra || []).map(String)];
+}
+
+/**
+ * Has Claude Code been told to trust `dir`? Claude asks once per folder ("Quick safety check ...
+ * Yes, I trust this folder") and remembers the answer in `.claude.json` — `$CLAUDE_CONFIG_DIR`'s if
+ * that is set, the home directory's otherwise — as `projects[<path>].hasTrustDialogAccepted`, and a
+ * folder inside a trusted one is trusted too. A brief typed into a pane showing that dialog takes
+ * its default, "No, exit", and the run dies in a second (WTR-70), so a pickup asks first.
+ *
+ * true when `dir` or any folder above it is trusted, false when the file says nothing of the kind,
+ * null when there is no file to ask (or it is not JSON): unknown, not untrusted. The home comes
+ * from `env`, so an engine handed an environment without one never reads the real file.
+ */
+export function claudeTrusts(dir, { env = process.env } = {}) {
+  const home = env.CLAUDE_CONFIG_DIR || env.HOME || env.USERPROFILE;
+  if (!home || !dir) return null;
+  let projects;
+  try { projects = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'))?.projects; }
+  catch { return null; }
+  if (!projects || typeof projects !== 'object') return false;
+  // Claude writes the keys with forward slashes on every platform; compare them that way.
+  const norm = (p) => { const s = String(p).replace(/\\/g, '/'); return s.length > 1 ? s.replace(/\/+$/, '') : s; };
+  const trusted = new Set();
+  for (const [p, v] of Object.entries(projects)) if (v?.hasTrustDialogAccepted === true) trusted.add(norm(p));
+  const starts = [path.resolve(dir)];
+  try { starts.push(fs.realpathSync(dir)); } catch { /* the folder need not exist to be asked about */ }
+  for (let d of starts) {
+    for (;;) {
+      if (trusted.has(norm(d))) return true;
+      const up = path.dirname(d);
+      if (up === d) break;
+      d = up;
+    }
+  }
+  return false;
 }

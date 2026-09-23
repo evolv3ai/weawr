@@ -13,6 +13,12 @@ import { loadConfig, pluginSpecs } from '../dist/config.js';
 import { teamPaths } from '../dist/paths.js';
 import { TeamEngine } from '../dist/team.js';
 
+// A claude pickup first asks Claude Code's .claude.json whether it trusts the repository (WTR-70).
+// These runs, and the CLIs they spawn, get an empty one of their own — never the machine's.
+const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'weawr-claude-'));
+process.env.CLAUDE_CONFIG_DIR = claudeHome;
+process.on('exit', () => fs.rmSync(claudeHome, { recursive: true, force: true }));
+
 const PROMPTS = fileURLToPath(new URL('../../recipes/prompts', import.meta.url));
 const EXAMPLES = fileURLToPath(new URL('../../../apps/cli/plugins', import.meta.url));
 
