@@ -120,6 +120,8 @@ const sleep = (ms: number) => new Promise((r?: any) => setTimeout(r, ms));
 const PROMPT_UPTAKE_MS = 20_000;
 const PROMPT_ATTEMPTS = 3;
 const PROMPT_RETRY_MS = 4_000;
+/** herdr's name for the key that empties Claude Code's input line (readline's kill-line). */
+const CLEAR_INPUT_KEY = 'ctrl+u';
 /** How long a brief that landed keeps an agent busy, at the least: quiet again inside this is a brief that did not land. */
 const PROMPT_SETTLE_MS = 8_000;
 function ts(d: Date) { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
@@ -1230,6 +1232,11 @@ export class TeamEngine {
     // stalled submission is sent again, a few times, before the agent is left to be prompted
     // when it next takes input.
     for (let attempt = 1; ; attempt++) {
+      // A stalled send can sit in the input box unsubmitted (Claude just past its trust dialog), and
+      // the next send would be appended to it: the agent then gets the brief two or three times over
+      // in one prompt. Empty the input line before a retry, never before the first send; a clear that
+      // fails is noted and the brief goes anyway.
+      if (attempt > 1) await this.clearInput(key, run);
       try {
         await this.herdr.prompt(run.agentName, run.promptText, { wait: true, until: ['working', 'blocked'], timeoutMs: PROMPT_UPTAKE_MS });
         // herdr saw it start; a brief that landed keeps it busy for longer than a startup screen's
@@ -1253,6 +1260,16 @@ export class TeamEngine {
         this.log(`${key}: the agent has not taken the brief yet (${isBlocked(e) ? 'it is showing a dialog' : isStalled(e) ? 'it did not start on it' : e.message}); will try again when it takes input`);
         return false;
       }
+    }
+  }
+
+  /** Empty the agent's input line (Ctrl-U in Claude Code's prompt) before the brief is sent again. */
+  async clearInput(key?: any, run?: any) {
+    try {
+      if (!run.paneId) throw new Error('no pane is known for the agent');
+      await this.herdr.sendKeys(run.paneId, CLEAR_INPUT_KEY);
+    } catch (e: any) {
+      this.log(`${key}: could not clear the agent's input line before sending the brief again (${e.message}); sending it anyway`);
     }
   }
 
