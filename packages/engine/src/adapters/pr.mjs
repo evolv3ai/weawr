@@ -20,7 +20,7 @@ const PR_URL = /^https?:\/\/([^/?#]+)\/([^/?#]+)\/([^/?#]+)\/pulls?\/(\d+)(?:[/?
  */
 export function watchesMerge(rule) {
   const p = rule?.onMerged;
-  return !!p && ['exitAgent', 'closeWorkspace', 'removeWorktree', 'comment', 'notify'].some((k) => p[k]);
+  return !!p && ['exitAgent', 'closeWorkspace', 'removeWorktree', 'comment', 'notify', 'state'].some((k) => p[k]);
 }
 
 /** { host, owner, repo, number } for a pull request URL, or null for anything else. */

@@ -1459,7 +1459,7 @@ export class TeamEngine {
     // pr_open goes to review; needs_human is a question put in writing, so it waits where an agent asking in chat would.
     const doneState = status === 'pr_open' ? rule.onDone.state : status === 'needs_human' ? rule.onIdle?.state : null;
     if (this.tracker && doneState) {
-      const data = { issue: { ...slimIssue(readJson(path.join(run.archiveDir, 'issue.json'), {})), id: run.issueId }, state: doneState };
+      const data = { issue: { ...slimIssue(run.archiveDir ? readJson(path.join(run.archiveDir, 'issue.json'), {}) : {}), id: run.issueId }, state: doneState };
       owed.push({ id: this.owe('tracker.setState', data, key), kind: 'tracker.setState', data, runKey: key });
     }
     run.waitingOnPerson = null;
@@ -1700,6 +1700,9 @@ export class TeamEngine {
       const did = await this.shutdown(key, run, rule);
       run.status = 'merged'; run.finishedAt = this.clock().toISOString(); this.commit(() => { this.saveState(); this.emit('run.closed', key, { did }); });
       this.settle(key, run, 'pr_merged');
+      // `onMerged.state` moves the issue on (e.g. "Done"). Owed like every other move, so a tracker
+      // that says no is tried again later, and it comes after the shutdown so it never holds it up.
+      if (rule.onMerged?.state && this.tracker) await this.moveIssue(key, run, rule.onMerged.state);
       // The notification only carries the first line, and with nothing switched on the thing you
       // need from it is what is still standing — so that goes first and the URL follows.
       const lines = did.length
@@ -1841,7 +1844,7 @@ export class TeamEngine {
   }
 
   async moveIssue(key: string, run: any, state: string) {
-    const data = { issue: { ...slimIssue(readJson(path.join(run.archiveDir, 'issue.json'), {})), id: run.issueId }, state };
+    const data = { issue: { ...slimIssue(run.archiveDir ? readJson(path.join(run.archiveDir, 'issue.json'), {}) : {}), id: run.issueId }, state };
     const owed = [{ id: this.owe('tracker.setState', data, key), kind: 'tracker.setState', data, runKey: key }];
     this.saveState();
     await this.performOwed(owed);

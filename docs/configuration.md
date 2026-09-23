@@ -180,7 +180,8 @@ The same fields work on every tracker; what they map to on GitHub is in
                                                         // its PR conflicts and its session is gone
     "onIdle":    { "comment": true, "notify": true },   // agent stopped without writing result.json
     "onMerged":  { "comment": false, "notify": true, "exitAgent": false,
-                   "closeWorkspace": false, "removeWorktree": false }  // the PR from this run was merged
+                   "closeWorkspace": false, "removeWorktree": false }  // the PR from this run was merged;
+                                                        // add "state": "Done" to move the issue on
   },
   "rules": [                  // evaluated in order; first match wins; every rule inherits defaults
     { "name": "ai", "match": "label:ai and team:ENG and not state:started", "enabled": true },

@@ -77,6 +77,7 @@ test('an HTTP failure says so rather than looking like "not merged yet"', async 
 test('a rule is watched to the merge unless every onMerged step is off', () => {
   assert.equal(watchesMerge({ onMerged: { comment: true, exitAgent: true, closeWorkspace: true, removeWorktree: true, notify: true } }), true);
   assert.equal(watchesMerge({ onMerged: { comment: true } }), true, 'a comment on merge is reason enough to watch');
+  assert.equal(watchesMerge({ onMerged: { state: 'Done' } }), true, 'so is a state to move the issue to');
   // The shipped default: nothing is torn down, but the merge is still worth telling you about.
   assert.equal(watchesMerge({ onMerged: { comment: false, notify: true, exitAgent: false, closeWorkspace: false, removeWorktree: false } }), true);
   assert.equal(watchesMerge({ onMerged: { exitAgent: false, closeWorkspace: false, removeWorktree: false, comment: false, notify: false } }), false);

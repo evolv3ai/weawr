@@ -132,6 +132,7 @@ export const DEFAULTS = {
     onBlocked: { comment: true, notify: true },
     onIdle: { comment: true, notify: true },
     // A merged PR ends a run. Nothing is torn down unless asked: "onMerged": { "exitAgent": true, "closeWorkspace": true, "removeWorktree": true }
+    // No `state` by default: the issue stays where onDone put it. "onMerged": { "state": "Done" } moves it on.
     onMerged: { comment: false, notify: true, exitAgent: false, closeWorkspace: false, removeWorktree: false },
   } as Record<string, any>,
   rules: [] as any[],
