@@ -190,6 +190,7 @@ one machine only):
 | `exitAgent` | `false` | sends the agent `/exit` and waits up to 20s for it to go — Claude Code then writes its own history and stops its own MCP servers, rather than having its pane pulled away. If Claude Code answers with its "background work is running" prompt (a PR watch of its own, say), weawr reads that off the screen and takes the default, exit and stop tasks; no other dialog is ever answered for it |
 | `closeWorkspace` | `false` | `herdr workspace close` — only if the workspace under the run's id is still the run's (see Mark done) |
 | `removeWorktree` | `false` | `git worktree remove` — never forced, so a worktree with uncommitted or untracked files is kept and the log says so |
+| `state` | none | moves the issue to this state (`"Done"`, say) — a `tracker.setState` like `onDone.state`'s, tried again later if the tracker refuses it, and made after the steps above so it never holds them up. Without it the issue stays where `onDone` left it |
 | `notify` | `true` | one herdr notification: the PR merged, and which workspace and worktree the run still has |
 | `comment` | `false` | the same as a comment on the issue. Off because GitHub already writes the merge into the issue's timeline; worth turning on for Linear, which does not |
 

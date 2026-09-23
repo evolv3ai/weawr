@@ -24,7 +24,8 @@ the `herdr` CLI on your laptop. That's it.
   issue at once, on different providers and different models, with the reviewer's worktree cut from
   the implementer's actual branch.
 - **It knows when it is done.** After the PR opens the run keeps watching it. When it merges you get
-  told, and it tears down only what you asked it to.
+  told, and it tears down only what you asked it to — and, with `"onMerged": { "state": "Done" }`,
+  moves the issue to Done.
 - **It keeps its PRs mergeable.** While a PR waits on you, other PRs land. When GitHub says one has
   drifted into conflicts, the implementer is sent back to merge the base in and push, so what you
   open to review is still something you can merge.

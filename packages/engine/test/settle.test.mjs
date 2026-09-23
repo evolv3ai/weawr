@@ -19,13 +19,13 @@ const NOW = Date.parse('2026-09-21T12:00:00.000Z');
 
 const made = [];
 process.on('exit', () => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
-function repo() {
+function repo(onMerged = null) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'weawr-settle-')));
   execFileSync('git', ['init', '-q', dir]);
   fs.mkdirSync(path.join(dir, '.weawr'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.weawr', 'config.json'), JSON.stringify({
     tracker: 'linear',
-    defaults: { worktree: 'none', onPickup: { comment: false }, onDone: { comment: false, notify: false }, onBlocked: { comment: false, notify: false }, onMerged: null },
+    defaults: { worktree: 'none', onPickup: { comment: false }, onDone: { comment: false, notify: false }, onBlocked: { comment: false, notify: false }, onMerged },
     rules: [{ name: 'r', match: 'label:never' }],
   }));
   made.push(dir);
@@ -38,14 +38,15 @@ function fakeTracker({ open = [], states = {} } = {}) {
     async me() { return { id: 'me', name: 'me' }; },
     async openIssues() { return open.map((k) => issue(k, 'started')); },
     async issueByKey(k) { t.lookups.push(k); return k in states ? issue(k, states[k]) : null; },
-    async comment() {}, async addLabel() {}, async removeLabel() {}, async assign() {}, async setState() {},
+    moves: [],
+    async comment() {}, async addLabel() {}, async removeLabel() {}, async assign() {}, async setState(i, state) { t.moves.push({ id: i.id, state }); },
   };
   return t;
 }
 const herdr = { async agentGet() { return null; }, async notify() {}, async closeWorkspace() {}, async prompt() {}, waitAgent() { return new Promise(() => {}); } };
 const run = (key, extra = {}) => ({ rule: 'r', pass: 1, status: 'done', issueKey: key, title: key, startedAt: '2026-09-21T09:00:00Z', finishedAt: '2026-09-21T10:00:00Z', agentName: key.toLowerCase(), worktree: 'none', notified: {}, result: { status: 'needs_human', summary: 'Which way?' }, ...extra });
-function engine(runs, { tracker, fetchImpl = async () => { throw new Error('no network in tests'); }, clock = () => new Date(NOW) } = {}) {
-  const dir = repo();
+function engine(runs, { tracker, fetchImpl = async () => { throw new Error('no network in tests'); }, clock = () => new Date(NOW), onMerged = null } = {}) {
+  const dir = repo(onMerged);
   const paths = teamPaths(dir);
   const store = SqliteStore.open(storePath(paths.stateDir));
   store.save({ runs, nudges: {} });
@@ -89,4 +90,22 @@ test('a pull request closed without merging settles its run', async () => {
   await e.pollOnce();
   assert.equal(e.state.runs['WTR-2'].status, 'done');
   assert.equal(e.state.runs['WTR-2'].settled.why, 'pr_closed');
+});
+
+test('onMerged.state moves a merged run\'s issue there, once; without it the issue is left alone', async () => {
+  const prUrl = 'https://github.com/o/r/pull/3';
+  const fetchImpl = async () => new Response(JSON.stringify({ state: 'closed', merged: true, merged_at: '2026-09-21T11:00:00Z', head: { sha: 'abc' }, base: { ref: 'main' } }), { status: 200 });
+  const awaiting = () => ({ 'WTR-3': run('WTR-3', { issueId: 'WTR-3', status: 'awaiting_merge', prUrl, result: { status: 'pr_open', prUrl } }) });
+
+  const moved = fakeTracker({ open: ['WTR-3'] });
+  const e = engine(awaiting(), { tracker: moved, fetchImpl, onMerged: { notify: false, state: 'Done' } });
+  await e.pollOnce(); await e.pollOnce();
+  assert.equal(e.state.runs['WTR-3'].status, 'merged');
+  assert.deepEqual(moved.moves, [{ id: 'WTR-3', state: 'Done' }]);
+
+  const left = fakeTracker({ open: ['WTR-3'] });
+  const f = engine(awaiting(), { tracker: left, fetchImpl, onMerged: { notify: true } });
+  await f.pollOnce();
+  assert.equal(f.state.runs['WTR-3'].status, 'merged');
+  assert.deepEqual(left.moves, []);
 });
