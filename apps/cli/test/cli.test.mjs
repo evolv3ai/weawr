@@ -177,6 +177,22 @@ test('reset by issue key forgets every role\'s run on it; by run key, only that 
   assert.match(run(all, ['reset', 'GH-9']).out, /no run called GH-9/);
 });
 
+test('rework: listed in --help, prints its usage for --help without acting, and refuses a key with no run', (t) => {
+  const runs = { 'GH-7': { rule: 'r', status: 'awaiting_merge', startedAt: '2026-01-01T00:00', title: 'a' } };
+  const dir = repo(t, { '.weawr/config.json': config(), '.weawr/state/state.json': JSON.stringify({ runs }) });
+  assert.match(run(dir, ['--help']).out, /weawr rework <KEY> \[--note <text>\]/);
+  const help = run(dir, ['rework', 'GH-7', '--help']);
+  assert.equal(help.status, 0);
+  assert.match(help.out, /^ {2}weawr rework <KEY>/);
+  assert.ok(fs.existsSync(path.join(dir, '.weawr/state/state.json')) && !fs.existsSync(path.join(dir, '.weawr/state/state.json.migrated')), '--help did not touch the team');
+  const unknown = run(dir, ['rework', 'GH-9', '--note', 'x'], { LINEAR_API_KEY: '' });
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.out, /no run recorded for GH-9/);
+  assert.deepEqual(Object.keys(runsIn(dir)), ['GH-7'], 'nothing forgotten');
+  assert.match(run(dir, ['rework']).out, /usage: weawr rework <KEY> \[--note <text>\]/);
+  assert.match(run(dir, ['rework', 'GH-7', '--force']).out, /unknown option --force/);
+});
+
 test('"basedOn" names another role, checked at config load', (t) => {
   const rules = (basedOn) => [
     { name: 'impl', match: 'label:ai', role: 'impl' },

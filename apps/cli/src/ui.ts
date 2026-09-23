@@ -9,6 +9,7 @@ a git worktree and a herdr workspace, start a coding agent in it, brief it, and 
   weawr match "<expr>"    evaluate an expression against live open issues
   weawr status            show tracked runs
   weawr reset <KEY>       forget a run so the issue can be picked up again
+  weawr rework <KEY> [--note <text>]  send a PR back to its agent: note, close the PR, reset, drop the pickup comment and claim label, back to the queue state
   weawr login [tracker]   sign in (browser when possible) and save the token for this machine
   weawr logout [tracker]  forget the saved token
   weawr smoke             end-to-end test against herdr with a fake issue (no tracker calls)

@@ -181,6 +181,7 @@ the [configuration reference](docs/configuration.md#the-rule-language).
 | `weawr status` | tracked runs, their outcome, and each live agent's state |
 | `weawr console` | **the team room**: every team on this machine, in a browser, phone first — what needs you, what is assembling, today's output |
 | `weawr reset <KEY>` | forget a run so the issue can be picked up again |
+| `weawr rework <KEY> [--note <text>]` | send a PR back to its agent: post the note, close the open PR (the branch stays), reset, delete weawr's pickup comment, remove the claim label, and move the issue to the rule's `state:` queue — see [Sending a PR back](docs/configuration.md#sending-a-pr-back-weawr-rework) |
 | `weawr login [linear\|github] [--paste]` | sign in and save the token for this machine |
 | `weawr logout [linear\|github]` | forget the saved token |
 | `weawr smoke` | end-to-end herdr test with a fake issue, no tracker calls |

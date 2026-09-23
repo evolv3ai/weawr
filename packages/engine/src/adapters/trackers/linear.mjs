@@ -117,6 +117,12 @@ export class LinearTracker {
     return d.commentCreate.comment;
   }
 
+  /** Delete one comment by the id the issue's `comments` carry. */
+  async deleteComment(commentId) {
+    const d = await this.gql('mutation($id: String!) { commentDelete(id: $id) { success } }', { id: commentId });
+    if (!d.commentDelete?.success) throw new Error(`Linear would not delete comment ${commentId}`);
+  }
+
   async teamStates(teamId) {
     if (!this.statesByTeam.has(teamId)) {
       const d = await this.gql('query($id: String!) { team(id: $id) { states { nodes { id name type position } } } }', { id: teamId });
@@ -192,7 +198,7 @@ const ISSUE_FIELDS = `{
   creator { id name displayName email }
   state { id name type }
   cycle { id number isActive }
-  comments(last: 25) { nodes { body createdAt user { name displayName } } }
+  comments(last: 25) { nodes { id body createdAt user { name displayName } } }
 }`;
 
 const ISSUES_QUERY = `query($filter: IssueFilter, $first: Int, $after: String) {
@@ -226,6 +232,6 @@ export function normalizeIssue(n) {
     creator: user(n.creator),
     state: n.state,
     cycle: n.cycle || null,
-    comments: (n.comments?.nodes || []).map((c) => ({ body: c.body, createdAt: c.createdAt, author: c.user?.displayName || c.user?.name || 'unknown' })),
+    comments: (n.comments?.nodes || []).map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, author: c.user?.displayName || c.user?.name || 'unknown' })),
   };
 }

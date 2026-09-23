@@ -9,6 +9,7 @@ import { HELP, commandHelp, terminal } from './ui.js';
 import { init } from './commands/init.js';
 import { auth } from './commands/auth.js';
 import { reset, status } from './commands/status.js';
+import { rework } from './commands/rework.js';
 import { match } from './commands/match.js';
 import { watch } from './commands/watch.js';
 import { smoke } from './commands/smoke.js';
@@ -51,6 +52,7 @@ export async function main(argv: string[]): Promise<void> {
   if (cmd !== 'smoke') await updateReminder(ctx);
   if (cmd === 'status') return status(ctx);
   if (cmd === 'reset') return reset(ctx, argv[1]);
+  if (cmd === 'rework') return rework(ctx, argv.slice(1));
   if (cmd === 'smoke') return smoke(ctx, argv);
   if (cmd === 'migrate') return migrate(ctx, argv.slice(1));
   if (cmd === 'recipe') return recipe(ctx, argv.slice(1));

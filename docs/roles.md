@@ -54,6 +54,9 @@ Give a rule a `role` and everything the run is keyed by follows it:
   that role's branch — see [Reviewing the actual code](#reviewing-the-actual-code-basedon).
 - `weawr reset GH-7` forgets every role's run on the issue; `weawr reset GH-7@review`
   forgets just that one.
+- `weawr rework GH-7@impl --note "…"` sends the implementer's PR back: closes it, resets that run,
+  and clears its pickup comment and `herdr:impl` label so it is picked up again — see
+  [Sending a PR back](configuration.md#sending-a-pr-back-weawr-rework).
 
 ## The briefs that ship
 
