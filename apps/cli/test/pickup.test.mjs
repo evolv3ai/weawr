@@ -11,6 +11,12 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { teamPaths, readTeamState } from '@weawr/engine';
 
+// A claude pickup first asks Claude Code's .claude.json whether it trusts the repository (WTR-70).
+// These runs, and the CLIs they spawn, get an empty one of their own — never the machine's.
+const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'weawr-claude-'));
+process.env.CLAUDE_CONFIG_DIR = claudeHome;
+process.on('exit', () => fs.rmSync(claudeHome, { recursive: true, force: true }));
+
 const BIN = fileURLToPath(new URL('../dist/weawr.mjs', import.meta.url));
 
 /**

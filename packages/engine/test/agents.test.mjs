@@ -3,7 +3,10 @@
 // flags, so the pane died at the prompt and the run was lost before the brief was ever sent.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { agentArgv, describeAgent, exitCommandFor, profileFor, TRANSLATED_KINDS } from '../dist/agents.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { agentArgv, claudeTrusts, describeAgent, exitCommandFor, profileFor, TRANSLATED_KINDS } from '../dist/agents.mjs';
 
 const wanted = { name: 'GH-7.review', permissionMode: 'auto', model: 'a-model', effort: 'high' };
 
@@ -63,4 +66,44 @@ test('a kind that is an Object property is not a profile', () => {
 test('the startup line says what a rule runs, and stays quiet when it is the default', () => {
   assert.equal(describeAgent({}), 'claude');
   assert.equal(describeAgent({ agentKind: 'codex', model: 'gpt-5-codex', effort: 'high' }), 'codex gpt-5-codex effort high');
+});
+
+// WTR-70: a brief typed onto Claude Code's folder-trust dialog takes "No, exit". Trust is read from
+// a .claude.json in a temp dir, never the real one: every call below names its home in `env`.
+function claudeHome(t, projects) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'weawr-claude-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  if (projects !== undefined) fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ projects }));
+  return home;
+}
+
+test('a folder Claude Code trusts is trusted, and so is anything inside it', (t) => {
+  const home = claudeHome(t, { '/work/repo': { hasTrustDialogAccepted: true }, '/work/other': { hasTrustDialogAccepted: false } });
+  assert.equal(claudeTrusts('/work/repo', { env: { HOME: home } }), true);
+  assert.equal(claudeTrusts('/work/repo/', { env: { HOME: home } }), true);
+  assert.equal(claudeTrusts('/work/repo/.weawr/worktrees/x', { env: { HOME: home } }), true, 'an ancestor counts');
+});
+
+test('a folder Claude Code has not trusted is not, and neither is one beside or above a trusted one', (t) => {
+  const home = claudeHome(t, { '/work/repo': { hasTrustDialogAccepted: true }, '/work/other': { hasTrustDialogAccepted: false } });
+  assert.equal(claudeTrusts('/work/other', { env: { HOME: home } }), false);
+  assert.equal(claudeTrusts('/work/repo-two', { env: { HOME: home } }), false, 'a name prefix is not an ancestor');
+  assert.equal(claudeTrusts('/work', { env: { HOME: home } }), false);
+  assert.equal(claudeTrusts('/work/repo', { env: { HOME: claudeHome(t, {}) } }), false, 'no projects at all');
+});
+
+test('no .claude.json, or one that is not JSON, is unknown rather than untrusted', (t) => {
+  assert.equal(claudeTrusts('/work/repo', { env: { HOME: claudeHome(t) } }), null);
+  const bad = claudeHome(t);
+  fs.writeFileSync(path.join(bad, '.claude.json'), '{ not json');
+  assert.equal(claudeTrusts('/work/repo', { env: { HOME: bad } }), null);
+  assert.equal(claudeTrusts('/work/repo', { env: {} }), null, 'no home to look in');
+});
+
+test('CLAUDE_CONFIG_DIR is where .claude.json is read from when it is set', (t) => {
+  const home = claudeHome(t, { '/work/repo': { hasTrustDialogAccepted: false } });
+  const config = claudeHome(t, { '/work/repo': { hasTrustDialogAccepted: true } });
+  assert.equal(claudeTrusts('/work/repo', { env: { HOME: home } }), false);
+  assert.equal(claudeTrusts('/work/repo', { env: { HOME: home, CLAUDE_CONFIG_DIR: config } }), true);
+  assert.equal(claudeTrusts('/work/repo', { env: { HOME: config, CLAUDE_CONFIG_DIR: claudeHome(t) } }), null, 'the home file is not a fallback');
 });

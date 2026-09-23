@@ -28,7 +28,7 @@ const { resolveCredential } = _auth as Record<string, any>;
 const { agentPlacement, isBlocked, isNameTaken, isStalled, workspaceOwner } = _herdr as Record<string, any>;
 const { desiredBranch, reconcileBranch } = _branch as Record<string, any>;
 const { catchUp, defaultBranch, makeWorktree, pullBase, removeWorktree } = _worktree as Record<string, any>;
-const { agentArgv, describeAgent, exitCommandFor } = _agents as Record<string, any>;
+const { agentArgv, claudeTrusts, describeAgent, exitCommandFor } = _agents as Record<string, any>;
 const { conflictPrompt, keepMergeable, mergePr, parsePrUrl, prState, watchesMerge } = _pr as Record<string, any>;
 const { nudgedByLabel, nudgesIn, nudgesLeft, nudgesSent, planNudge } = _nudge as Record<string, any>;
 const { GitHubTracker } = _github as Record<string, any>;
@@ -141,6 +141,8 @@ export class TeamEngine {
   reserved = new Set<string>();
   resupervise?: Set<string>;
   warned?: Set<string>;
+  /** The herdr notification about pickups held on Claude Code's trust has gone out; once per watcher start. */
+  trustNotified = false;
   pr: { host: string; token: string | null } | null = null;
   readonly paths: TeamPaths;
   readonly sources: ConfigSources;
@@ -534,8 +536,13 @@ export class TeamEngine {
     });
     // urgent first, then oldest first
     candidates.sort((a?: any, b?: any) => (prio(a.issue) - prio(b.issue)) || (Date.parse(a.issue.createdAt) - Date.parse(b.issue.createdAt)));
-    const picked = []; const waiting = [];
+    const picked = []; const waiting = []; const held: string[] = [];
+    let trust: boolean | null | undefined; // asked once per cycle, and only when a claude rule has something to pick
     for (const c of candidates) {
+      if ((c.rule.agentKind || 'claude') === 'claude') {
+        if (trust === undefined) trust = this.claudeTrustsRepo();
+        if (trust === false) { held.push(c.key); continue; }
+      }
       if (this.runningCount() >= this.cfg.maxConcurrent) { waiting.push(c.key); this.warnOnce(`cap:${c.key}`, `${c.key} matches but waits: global cap ${this.cfg.maxConcurrent} reached`); continue; }
       if (this.runningCount(c.rule.name) >= c.rule.maxConcurrent) { waiting.push(c.key); this.warnOnce(`cap:${c.key}`, `${c.key} matches but waits: rule ${c.rule.name} cap ${c.rule.maxConcurrent} reached`); continue; }
       // A new pickup of an issue that does not say what to change is not made: its reporter is asked.
@@ -544,7 +551,29 @@ export class TeamEngine {
       try { await this.pickUp(c.issue, c.rule, { pass: c.pass, holdsClaim: c.holdsClaim }); picked.push(c.key); }
       catch (e: any) { this.log(`pickup ${c.key} failed: ${e.message}`); }
     }
-    return { scanned: issues.length, candidates: candidates.length, picked, waiting };
+    if (held.length) await this.holdForTrust();
+    return { scanned: issues.length, candidates: candidates.length, picked, waiting, held };
+  }
+
+  /**
+   * Whether Claude Code trusts this repository (agents.mjs): false holds every claude pickup, since
+   * a brief typed onto the trust dialog takes its default, "No, exit", and the run dies at once.
+   * Unknown — no `.claude.json` to read — picks up as before, with a warning.
+   */
+  claudeTrustsRepo(): boolean | null {
+    const trust = claudeTrusts(this.paths.repo, { env: this.env });
+    if (trust === null) this.warnOnce('claude-trust:unknown', `could not tell whether Claude Code trusts ${this.paths.repo} (no readable .claude.json); picking up anyway`);
+    return trust;
+  }
+
+  /** One line per poll cycle, and one herdr notification per watcher start, for pickups held on trust. */
+  async holdForTrust() {
+    const line = `Claude Code has not trusted ${this.paths.repo} — run \`claude\` there once and choose "Yes, I trust this folder"`;
+    this.log(`held: ${line}`);
+    if (this.dry || this.trustNotified) return;
+    this.trustNotified = true;
+    try { await this.herdr.notify('weawr: pickups held', line.replace(/`/g, '').slice(0, 120), { sound: 'none' }); }
+    catch (e: any) { this.log(`could not notify about the held pickups: ${e.message}`); }
   }
 
   /**

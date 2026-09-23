@@ -11,6 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { TeamEngine, SqliteStore, createApplication, teamPaths, loadConfig, storePath } from '@weawr/engine';
 import { LATEST_REVISION } from '@weawr/recipes';
 
+// A claude pickup first asks Claude Code's .claude.json whether it trusts the repository (WTR-70).
+// These runs, and the CLIs they spawn, get an empty one of their own — never the machine's.
+const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'weawr-claude-'));
+process.env.CLAUDE_CONFIG_DIR = claudeHome;
+process.on('exit', () => fs.rmSync(claudeHome, { recursive: true, force: true }));
+
 const PROMPTS = fileURLToPath(new URL('../../../packages/recipes/prompts', import.meta.url));
 const ISSUE = (over = {}) => ({ id: 'i7', identifier: 'GH-7', ref: 'GH-7', title: 'Fix the thing', description: '', url: 'https://example.test/7', labels: ['ai'], comments: [], createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', project: null, team: null, assignee: null, assignees: [], state: { name: 'open', type: 'started' }, ...over });
 

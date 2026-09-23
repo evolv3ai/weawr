@@ -73,7 +73,14 @@ the issue to move — capped per issue by `maxNudges`, after which a person is a
 
 1. Poll the tracker for open issues; evaluate each rule; the first matching rule wins — once per
    role, so an issue can start a run per role — then the guards above are applied. Urgent first,
-   then oldest first.
+   then oldest first. A rule that runs Claude Code (`agentKind` `claude`, the default) first checks
+   that Claude trusts the repository: `projects[<repo or a folder above it>].hasTrustDialogAccepted`
+   in `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when that is set). If it does not, nothing
+   is picked up — a brief typed onto the trust dialog takes its default, "No, exit", and the run
+   dies with the issue claimed — and each poll logs `held: Claude Code has not trusted <repo> — run
+   \`claude\` there once and choose "Yes, I trust this folder"`, with one herdr notification per
+   watcher start. `weawr dry-run` prints the same line. No readable `.claude.json` picks up as
+   before, with a warning. Other agent kinds are not checked.
 2. `git worktree add -b <branch> .weawr/worktrees/<slug> <tip of the base branch>` — weawr
    makes the worktree, on the branch the rule asked for and cut from the tip of what it is based on
    (see [Keeping up with `main`](#keeping-up-with-main)). An existing directory for that issue is
@@ -446,6 +453,9 @@ workspace and open the port in your browser.
   retries three times. A slow shell init (`nvm` in `.zshrc`) is the usual cause.
 - Claude never goes `working` after the prompt — open the workspace; it is probably sitting on
   the trust-this-folder dialog for a new worktree. Answer it once per repo.
+- `held: Claude Code has not trusted <repo>` — Claude has never been told to trust this repository
+  on this machine. Run `claude` in it once, choose "Yes, I trust this folder", and the next poll
+  picks up.
 - A pickup that failed (`weawr status` shows `failed`) is retried by itself: the claim label
   is handed back, and the next time the issue changes on the tracker (an edit, a state change, a
   label) it is a candidate again. Fix what the log complained about and touch the issue.
