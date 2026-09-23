@@ -374,3 +374,23 @@ again the issue goes back to `onPickup.state`. Point both at one status to get a
 A `needs_human` result ends the run, so an answer given afterwards starts nothing by itself. Answer
 in the agent's workspace. For a fresh turn instead, remove the claim label and run `weawr reset <key>`.
 
+### Sending a PR back: `weawr rework`
+
+`weawr reset <KEY>` only forgets the run. A PR that needs another go also has to be closed (while it
+is open the run is awaiting merge and never matched again), weawr's pickup comment deleted (the
+claim guard skips an issue that has one), the claim label removed, and the issue moved back to the
+queue. `weawr rework <KEY> [--note <text>]` does all of it, in this order, one line per step:
+
+1. posts `--note`, if given, on the issue as a plain comment;
+2. closes the run's PR with `gh pr close` if it is still open (the branch is kept, so the next
+   turn picks up on the same branch);
+3. forgets the run, exactly as `reset` does;
+4. deletes every weawr pickup comment on the issue (finished and blocked comments stay);
+5. removes the claim label (`claimLabel`, or `herdr:<role>` for a role);
+6. moves the issue to the state the rule's `match` asks for (`state:"Todo"`), or leaves the state
+   alone and says so when the match names none.
+
+The first step that fails stops the rest and says which one it was. A key with no recorded run is
+refused before anything is touched. As with `reset`, an issue key sends back every role's run on
+it, and a run key (`WTR-7@impl`) just that role, with only that role's pickup comment and label.
+

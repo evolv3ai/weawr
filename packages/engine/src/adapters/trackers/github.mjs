@@ -188,6 +188,11 @@ export class GitHubTracker {
     return { id: c.id, url: c.html_url };
   }
 
+  /** Delete one comment by the id the issue's `comments` carry (REST's comment id). */
+  async deleteComment(commentId) {
+    await this.rest('DELETE', `/issues/comments/${encodeURIComponent(commentId)}`);
+  }
+
   /**
    * The claim label is created on first use; there is no "create it in the UI first" step on GitHub.
    * The in-flight promise is shared, and a 422 from a racing creator counts as success, because two
@@ -266,7 +271,7 @@ export class GitHubTracker {
       creator: user(n.author),
       state: n.state === 'CLOSED' ? { id: 'closed', name: 'closed', type: 'completed' } : { id: 'open', name: 'open', type: 'unstarted' },
       cycle: null,
-      comments: (n.comments?.nodes || []).map((c) => ({ body: c.body, createdAt: c.createdAt, author: c.author?.login || 'unknown' })),
+      comments: (n.comments?.nodes || []).map((c) => ({ id: c.databaseId == null ? null : String(c.databaseId), body: c.body, createdAt: c.createdAt, author: c.author?.login || 'unknown' })),
     };
   }
 }
@@ -277,7 +282,7 @@ const ISSUE_FIELDS = `{
   milestone { number title }
   assignees(first: 10) { nodes { login name } }
   author { login ... on User { name } }
-  comments(last: 25) { nodes { body createdAt author { login } } }
+  comments(last: 25) { nodes { databaseId body createdAt author { login } } }
 }`;
 
 const ISSUES_QUERY = `query($owner: String!, $name: String!, $first: Int!, $after: String, $since: DateTime) {

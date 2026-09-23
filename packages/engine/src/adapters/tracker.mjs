@@ -37,6 +37,8 @@
 //   async openIssues({ sinceIso })   → Issue[]   open issues updated since `sinceIso`
 //   async issueByKey(identifier)     → Issue | null   a fresh copy (guards are re-checked right before claiming)
 //   async comment(issueId, body)     markdown comment on the issue
+//   async deleteComment(commentId)   delete one comment, by the `id` in the issue's comments
+//                                    (`weawr rework` removes the pickup comment with it)
 //   async addLabel(issueId, name)    the claim label; create it if the tracker allows, else throw a clear error
 //   async removeLabel(issueId, name)
 //   async assign(issue, user)        `user` is what me() returned
@@ -65,7 +67,7 @@
 //   creator     User | null
 //   state       { id, name, type } with type one of triage backlog unstarted started completed canceled
 //   cycle       { number, isActive } | null
-//   comments    [{ body, createdAt, author }]  newest 25 is plenty; the pickup comment guard reads them
+//   comments    [{ id, body, createdAt, author }]  newest 25 is plenty; the pickup comment guard reads them
 
 const USER_KEYS = ['id', 'name', 'displayName', 'email'];
 const ISSUE_KEYS = ['id', 'identifier', 'ref', 'title', 'description', 'url', 'priority', 'priorityLabel', 'estimate',

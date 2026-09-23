@@ -1,4 +1,4 @@
-// `weawr status` and `weawr reset <KEY>`: both go to the running owner when there is one, so a
+// `weawr status` and `weawr reset <KEY>` (and the forget step of `weawr rework`): all go to the running owner when there is one, so a
 // reset lands in the watcher's own memory rather than in a file it is about to overwrite.
 import { nudgesSent } from '@weawr/engine/nudge.mjs';
 import { createApplication, dispatchCommand, makeEngine, takeOwnership } from '../context.js';
@@ -28,6 +28,12 @@ export async function status(ctx: Context): Promise<void> {
 
 export async function reset(ctx: Context, key: string | undefined): Promise<void> {
   if (!key) throw new Error('usage: weawr reset <KEY>');
+  const forgot = await forgetRuns(ctx, key);
+  console.log(forgot.length ? `forgot ${forgot.join(', ')}` : `no run called ${key}`);
+}
+
+/** Forget an issue's runs (or one run key's), through the running owner when there is one. */
+export async function forgetRuns(ctx: Context, key: string): Promise<string[]> {
   const cfg = ctx.config();
   const { result } = await dispatchCommand(ctx, { type: 'run.reset', key }, async () => {
     // Nobody owns the team: take it for the duration of this write, so a watcher starting at
@@ -37,6 +43,13 @@ export async function reset(ctx: Context, key: string | undefined): Promise<void
     return { dispatch: async (cmd) => { try { return await app.dispatch(cmd); } finally { ownership.release(); } } };
   });
   if (!result.ok) throw new Error(result.error.message);
-  const { forgot } = result.result as { forgot: string[] };
-  console.log(forgot.length ? `forgot ${forgot.join(', ')}` : `no run called ${key}`);
+  return (result.result as { forgot: string[] }).forgot;
+}
+
+/** The runs this team holds, from the running owner when there is one. */
+export async function listRuns(ctx: Context): Promise<Record<string, any>> {
+  const cfg = ctx.config();
+  const { result } = await dispatchCommand(ctx, { type: 'runs.list' }, async () => createApplication(makeEngine(ctx, { cfg, tracker: null })));
+  if (!result.ok) throw new Error(result.error.message);
+  return (result.result as { runs: Record<string, any> }).runs;
 }

@@ -18,6 +18,8 @@ export { isStale, listRegistrations, readLegacyRegistry, registrationsDir, remov
 export type { Registration } from './registration.js';
 export { ApplicationError, createApplication, resetTargets } from './application.js';
 export type { Application, Command, CommandResult } from './application.js';
+export { queueStateOf, rework } from './rework.js';
+export type { GhRunner, ReworkOptions } from './rework.js';
 export { SqliteStore, UnsupportedSchemaError, SCHEMA_VERSION, storePath } from './store/sqlite.js';
 export type { AttemptRecord, EventRecord, OperationRecord, PendingAction, Acknowledgement } from './store/sqlite.js';
 export { inventory, migrateLegacyState } from './store/migrate.js';

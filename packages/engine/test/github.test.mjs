@@ -25,7 +25,7 @@ const node = {
   milestone: { number: 2, title: 'v1' },
   assignees: { nodes: [{ login: 'jmwind', name: 'Jean-Michel' }] },
   author: { login: 'alex', name: null },
-  comments: { nodes: [{ body: 'me too', createdAt: '2026-09-02T00:00:00Z', author: { login: 'alex' } }] },
+  comments: { nodes: [{ databaseId: 101, body: 'me too', createdAt: '2026-09-02T00:00:00Z', author: { login: 'alex' } }] },
 };
 const page = (nodes, hasNextPage = false) => ({ json: { data: { repository: { issues: { nodes, pageInfo: { hasNextPage, endCursor: hasNextPage ? 'c1' : null } } } } } });
 const tracker = (route, options = {}) => new GitHubTracker('ghp_test', { options: { repo: 'jmwind/weawr', ...options }, fetchImpl: fakeFetch(route) });
@@ -47,7 +47,7 @@ test('normalizes a GitHub issue into the shared shape', () => {
   assert.equal(issue.assignee.displayName, 'jmwind');
   assert.equal(issue.creator.name, 'alex');
   assert.deepEqual(issue.state, { id: 'open', name: 'open', type: 'unstarted' });
-  assert.deepEqual(issue.comments, [{ body: 'me too', createdAt: '2026-09-02T00:00:00Z', author: 'alex' }]);
+  assert.deepEqual(issue.comments, [{ id: '101', body: 'me too', createdAt: '2026-09-02T00:00:00Z', author: 'alex' }]);
   assert.equal(t.normalize({ ...node, state: 'CLOSED', assignees: { nodes: [] }, milestone: null, labels: { nodes: [] } }).state.type, 'completed');
 });
 
@@ -247,4 +247,10 @@ test('the repository comes from the origin remote in any of its spellings', () =
 test('without a recognisable repository the tracker says how to name one', () => {
   const t = new GitHubTracker('t', { options: { cwd: '/', repo: null }, fetchImpl: fakeFetch(() => null) });
   assert.throws(() => t.check(), /"tracker": \{ "type": "github", "repo": "owner\/name" \}/);
+});
+
+test('deleteComment deletes one comment through REST by its comment id', async () => {
+  const t = tracker(() => ({ status: 204, json: null }));
+  await t.deleteComment('101');
+  assert.deepEqual(t.fetch.calls.map((c) => `${c.method} ${c.url}`), ['DELETE https://api.github.com/repos/jmwind/weawr/issues/comments/101']);
 });

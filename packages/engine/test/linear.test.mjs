@@ -23,7 +23,7 @@ const node = {
   labels: { nodes: [{ name: 'ai' }] }, project: { id: 'p', name: 'GustKit' }, team: { id: 't', key: 'DEV', name: 'Development' },
   assignee: { id: 'u1', name: 'JM', displayName: 'jml', email: 'jml@example.com' }, creator: null,
   state: { id: 's', name: 'Todo', type: 'unstarted' }, cycle: { id: 'c', number: 3, isActive: true },
-  comments: { nodes: [{ body: 'hi', createdAt: '2026-09-02T00:00:00Z', user: { name: 'Alex', displayName: 'alex' } }] },
+  comments: { nodes: [{ id: 'c-1', body: 'hi', createdAt: '2026-09-02T00:00:00Z', user: { name: 'Alex', displayName: 'alex' } }] },
 };
 
 test('normalizes a Linear issue into the shared shape', () => {
@@ -33,7 +33,7 @@ test('normalizes a Linear issue into the shared shape', () => {
   assert.equal(issue.description, '');
   assert.equal(issue.branchName, 'jml/dev-12-crash-on-zoom');
   assert.equal(issue.assignee.login, null);
-  assert.deepEqual(issue.comments, [{ body: 'hi', createdAt: '2026-09-02T00:00:00Z', author: 'alex' }]);
+  assert.deepEqual(issue.comments, [{ id: 'c-1', body: 'hi', createdAt: '2026-09-02T00:00:00Z', author: 'alex' }]);
   assert.equal(normalizeIssue({ ...node, branchName: null }).branchName, 'dev-12-crash-on-zoom');
 });
 
@@ -169,4 +169,13 @@ test('removeLabel of a label Linear does not have is a no-op, not a create', asy
   await tracker.removeLabel('issue-1', 'herdr');
   assert.equal(labels.length, 0);
   assert.equal(calls.filter((c) => c.query.includes('issueRemoveLabel(')).length, 0);
+});
+
+test('deleteComment deletes one comment by its id, and says so when Linear refuses', async () => {
+  const f = fakeFetch(({ json }) => ({ json: { data: { commentDelete: { success: json.variables.id === 'c-1' } } } }));
+  const t = new LinearTracker('lin_api_x', { fetchImpl: f });
+  await t.deleteComment('c-1');
+  assert.match(f.calls[0].json.query, /commentDelete\(id: \$id\)/);
+  assert.deepEqual(f.calls[0].json.variables, { id: 'c-1' });
+  await assert.rejects(t.deleteComment('c-2'), /would not delete comment c-2/);
 });
