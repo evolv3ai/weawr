@@ -63,6 +63,10 @@
   function drift() { return view ? Date.now() - receivedAt : 0; }
   function dur(ms) { ms = Math.max(0, ms); var s = Math.round(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24); if (d) return d + 'd ' + (h % 24) + 'h'; if (h) return h + 'h ' + (m % 60) + 'm'; if (m) return m + 'm'; return s + 's'; }
   function clock(iso) { if (!iso) return ''; var d = new Date(iso); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+  // What Claude Code says runs cost; unknown (another agent, no transcript yet) is a dash, never $0.
+  function usd(c) { return c ? '$' + c.usd.toFixed(2) : '—'; }
+  function costTitle(c, what) { return c ? what + ' cost ' + usd(c) + ': ' + c.outputTokens.toLocaleString() + ' output tokens, ' + c.cacheReadTokens.toLocaleString() + ' read from cache' + (c.runs !== undefined ? ', over ' + c.runs + ' run' + (c.runs === 1 ? '' : 's') + ' with a known cost' : '') : what + ' cost unknown: no Claude Code cost record'; }
+  function teamCost(fs) { var t = null; fs.forEach(function (f) { if (f.cost) t = { usd: (t ? t.usd : 0) + f.cost.usd, outputTokens: (t ? t.outputTokens : 0) + f.cost.outputTokens, cacheReadTokens: (t ? t.cacheReadTokens : 0) + f.cost.cacheReadTokens, runs: (t ? t.runs : 0) + f.cost.runs }; }); return t; }
   function prNum(url) { return url ? '#' + url.split('/').pop() : ''; }
   function teams() { return view ? view.teams : []; }
   function taskAlerts(f) { var keys = []; f.alerts.forEach(function (a) { if (keys.indexOf(a.issueKey) < 0) keys.push(a.issueKey); }); return keys.length; }
@@ -126,7 +130,7 @@
     var wait = iss.humanWaitMs + (iss.bucket === 'inflight' && iss.light !== 'green' ? drift() : 0);
     return '<a class="row ' + esc(iss.light) + '" href="#/i/' + esc(f.id) + '/' + encodeURIComponent(iss.key) + '"><i class="led ' + esc(iss.light) + (iss.bucket !== 'inflight' ? ' still' : '') + '"></i>' +
       '<span class="t"><b>' + esc(iss.key) + '</b>' + esc(iss.title) + '</span>' +
-      '<span class="e"><span class="you' + (wait ? '' : ' none') + '" title="time a person was waited on">' + (wait ? dur(wait) : '0') + '<small>you</small></span><small class="el">' + dur(elapsed) + '</small></span>' +
+      '<span class="e"><span class="you' + (wait ? '' : ' none') + '" title="time a person was waited on">' + (wait ? dur(wait) : '0') + '<small>you</small></span><small class="el">' + dur(elapsed) + ' · <span class="usd" title="' + esc(costTitle(iss.cost, 'Agents\'')) + '">' + usd(iss.cost) + '</span></small></span>' +
       '<span class="s">' + (plain ? '' : chips(iss)) + '<span>' + (many ? esc(f.name) + ' · ' : '') + esc(phrase) + '</span>' + stats(iss) + '</span>' +
       (iss.light === 'green' && iss.bucket === 'inflight' ? '<span class="craft"><i></i></span>' : '') + '</a>';
   }
@@ -221,7 +225,7 @@
     var rules = f.rules.map(function (r, i) {
       return '<div><b style="color:' + roleColor(r.role || r.name, i) + '">' + esc(r.role || r.name) + '</b><span><em>' + esc(r.agent + (r.model ? ' ' + r.model : '')) + '</em>' + (r.effort ? ' · ' + esc(r.effort) : '') + (r.basedOn ? ' · after ' + esc(r.basedOn) : '') + (r.passes > 1 ? ' · ' + r.passes + ' passes' : '') + '<code>' + esc(r.match || 'any issue') + '</code></span></div>';
     }).join('') || '<div class="empty">No rules: this team picks nothing up.</div>';
-    var meta = esc(f.tracker) + ' · ' + esc(f.repo.replace(/^.*\//, '')) + (f.maxConcurrent ? ' · cap ' + f.maxConcurrent : '') + (f.pollSeconds ? ' · every ' + f.pollSeconds + 's' : '') +
+    var meta = esc(f.tracker) + ' · ' + esc(f.repo.replace(/^.*\//, '')) + ' · <span class="usd" title="' + esc(costTitle(f.cost, 'The team\'s agents\'')) + '">' + usd(f.cost) + ' spent</span>' + (f.maxConcurrent ? ' · cap ' + f.maxConcurrent : '') + (f.pollSeconds ? ' · every ' + f.pollSeconds + 's' : '') +
       ' · ' + (f.watcher.lastPoll ? (alive ? 'polled ' + dur(Date.now() - Date.parse(f.watcher.lastPoll)) + ' ago' : 'watcher not seen for ' + dur(Date.now() - Date.parse(f.watcher.lastPoll))) : (f.watcher.paneOnly ? 'watcher pane open' : 'watcher never seen'));
     return section('<i class="led ' + (alive ? 'green' : 'red') + ' still"></i>' + esc(f.name), f.rules.length + ' rule' + (f.rules.length === 1 ? '' : 's'), '<div class="inset pane team"><div class="fmeta' + (alive ? '' : ' stale') + '">' + meta + '</div><div class="rules">' + rules + '</div></div>',
       { more: '<span class="more" style="color:var(--muted)">' + esc(f.roles.join(' → ')) + '</span>' });
@@ -258,7 +262,7 @@
     if (pile) more = '<button class="more tidy" id="tidy" title="Close the herdr workspaces of exited agents on tasks already marked done">Tidy ' + pile + ' workspace' + (pile === 1 ? '' : 's') + '</button>' + more;
     body += section(showAll ? 'Output' : 'Output today', list.length, list.length ? '<div class="inset pane">' + list.map(function (p) { return row(p[0], p[1], many, true); }).join('') + '</div>' : '<div class="inset pane"><div class="empty">Nothing finished' + (showAll ? '' : ' today') + '.</div></div>', { more: more });
     var wait = fs.reduce(function (s, x) { return s + x.humanWaitMs; }, 0);
-    body += '<div class="foot"><span>' + esc(fs.reduce(function (s, x) { return s + x.counts.running; }, 0)) + ' running · you were waited on for <b>' + dur(wait) + '</b> in total</span><span>' + (f && f.watcher.lastPoll ? 'polled ' + dur(Date.now() - Date.parse(f.watcher.lastPoll)) + ' ago' : '') + '</span></div>';
+    body += '<div class="foot"><span>' + esc(fs.reduce(function (s, x) { return s + x.counts.running; }, 0)) + ' running · you were waited on for <b>' + dur(wait) + '</b> in total · agents cost <b class="usd" title="' + esc(costTitle(f.cost, 'The team\'s agents\'')) + '">' + usd(f.cost) + '</b></span><span>' + (f && f.watcher.lastPoll ? 'polled ' + dur(Date.now() - Date.parse(f.watcher.lastPoll)) + ' ago' : '') + '</span></div>';
     return head + belt() + '<div class="body">' + body + '</div>' + (sheet ? '<div class="dimmer" id="dim"></div>' : '');
   }
 
@@ -287,7 +291,7 @@
       '<div class="floor">' + gears + '<span class="panel"><span class="state">' + lights + '<span class="ph">' + esc(phrase) + '</span></span>' +
       '<span class="crew">' + crew + (agents.length ? '<span class="who">' + esc(agents.join(', ')) + '</span>' : '') + '</span>' + (working ? '<span class="craft"><i></i></span>' : '') + '</span></div>' +
       prod +
-      '<div class="needs"><span class="pill' + (alerts ? ' hot' : '') + '">' + (alerts ? alerts + ' alert' + (alerts > 1 ? 's' : '') : 'nothing needs you') + '</span><span class="pill">' + f.counts.inflight + ' assembling</span>' + ownerLine(f) + (f.watcher.lastPoll && alive ? '<span class="m">polled ' + dur(Date.now() - Date.parse(f.watcher.lastPoll)) + ' ago</span>' : '') + '</div></a>';
+      '<div class="needs"><span class="pill' + (alerts ? ' hot' : '') + '">' + (alerts ? alerts + ' alert' + (alerts > 1 ? 's' : '') : 'nothing needs you') + '</span><span class="pill">' + f.counts.inflight + ' assembling</span><span class="pill usd" title="' + esc(costTitle(f.cost, 'The team\'s agents\'')) + '">' + usd(f.cost) + ' spent</span>' + ownerLine(f) + (f.watcher.lastPoll && alive ? '<span class="m">polled ' + dur(Date.now() - Date.parse(f.watcher.lastPoll)) + ' ago</span>' : '') + '</div></a>';
   }
   // The belt from one plant down to the next: chevrons always run; cargo rides it only when a plant at either end is working.
   function link(above, below) {
@@ -302,7 +306,7 @@
     if (!fs.length) body = '<div class="empty">No team has reported yet. Start a watcher with <b>weawr</b> in a repository, and it appears here on its first poll.</div>';
     else body = '<div class="plants">' + fs.map(function (f, i) { return (i ? link(fs[i - 1], f) : '') + plant(f); }).join('') + '</div>';
     var wait = fs.reduce(function (s, x) { return s + x.humanWaitMs; }, 0), running = fs.reduce(function (s, x) { return s + x.counts.running; }, 0);
-    body += '<div class="foot"><span>' + fs.length + ' team' + (fs.length === 1 ? '' : 's') + ' on ' + esc(document.body.dataset.hostname) + ' · ' + running + ' running · you were waited on for <b>' + dur(wait) + '</b> in total</span></div>';
+    body += '<div class="foot"><span>' + fs.length + ' team' + (fs.length === 1 ? '' : 's') + ' on ' + esc(document.body.dataset.hostname) + ' · ' + running + ' running · you were waited on for <b>' + dur(wait) + '</b> in total · agents cost <b class="usd" title="' + esc(costTitle(teamCost(fs), 'Every team\'s agents\'')) + '">' + usd(teamCost(fs)) + '</b></span></div>';
     return head + belt() + '<div class="body">' + body + '</div>' + (sheet ? '<div class="dimmer" id="dim"></div>' : '');
   }
 
@@ -328,7 +332,7 @@
     var head = '<div class="titlebar">' + MARK + '<h1>' + esc(iss.key) + '</h1><span class="drag"></span><a class="tbtn red" href="#/f/' + esc(f.id) + '" aria-label="back">✕</a></div>';
     var elapsed = iss.finishedAt ? iss.elapsedMs : iss.elapsedMs + drift();
     var lead = iss.runs.filter(function (r) { return r.needsYou; })[0] || iss.runs.filter(function (r) { return r.status === 'running'; })[0] || iss.runs[0];
-    var status = '<div class="status"><i class="led ' + esc(iss.light) + (iss.bucket !== 'inflight' ? ' still' : '') + '"></i><b>' + esc(iss.bucket === 'merged' ? 'Merged' : lead.phrase) + '</b>' + (iss.finishedAt ? ' at ' + clock(iss.finishedAt) : '') + ' <small>' + dur(elapsed) + ' end to end</small><span class="you big" title="time a person was waited on">' + dur(iss.humanWaitMs) + '<small>you</small></span></div>';
+    var status = '<div class="status"><i class="led ' + esc(iss.light) + (iss.bucket !== 'inflight' ? ' still' : '') + '"></i><b>' + esc(iss.bucket === 'merged' ? 'Merged' : lead.phrase) + '</b>' + (iss.finishedAt ? ' at ' + clock(iss.finishedAt) : '') + ' <small>' + dur(elapsed) + ' end to end · <span class="usd" title="' + esc(costTitle(iss.cost, 'Agents\'')) + '">' + usd(iss.cost) + '</span></small><span class="you big" title="time a person was waited on">' + dur(iss.humanWaitMs) + '<small>you</small></span></div>';
     var ws = iss.runs.map(function (r) { return r.workspaceId; }).filter(Boolean)[0];
     var links = '<div class="links">' + (iss.url ? '<a href="' + esc(iss.url) + '" target="_blank" rel="noopener">Issue<small>' + esc(iss.key) + (iss.issueState ? ' ' + esc(iss.issueState) : '') + '</small></a>' : '<span>Issue<small>no link</small></span>') +
       (iss.prUrl ? '<a href="' + esc(iss.prUrl) + '" target="_blank" rel="noopener">Pull request<small>' + esc(prNum(iss.prUrl)) + ' ' + esc(iss.prState) + '</small></a>' : '<span>Pull request<small>none yet</small></span>') +
@@ -336,7 +340,7 @@
     var t0 = Date.parse(iss.startedAt), t1 = iss.finishedAt ? Date.parse(iss.finishedAt) : Date.now(); if (t1 - t0 < 60000) t1 = t0 + 60000;
     var bars = iss.runs.map(function (r, ri) {
       var segs = r.segments.map(function (s) { var l = Math.max(0, (s.from - t0) / (t1 - t0) * 100), w = Math.max(0.5, (Math.min(s.to, t1) - s.from) / (t1 - t0) * 100); return '<i class="' + esc(s.kind) + '" style="left:' + l.toFixed(2) + '%;width:' + w.toFixed(2) + '%"></i>'; }).join('');
-      var v = dur((r.finishedAt ? r.elapsedMs : r.elapsedMs + drift())) + ' · ' + esc(verdict(r));
+      var v = dur((r.finishedAt ? r.elapsedMs : r.elapsedMs + drift())) + ' · <span class="usd" title="' + esc(costTitle(r.cost, (r.role || r.rule) + '\'s')) + '">' + usd(r.cost) + '</span> · ' + esc(verdict(r));
       return '<div class="role"><span class="n" style="color:' + roleColor(r.role, ri) + '">' + esc(r.role || r.rule) + '<small>' + esc(r.agentKind) + (r.pass > 1 ? ' · pass ' + r.pass : '') + '</small></span><div class="bar">' + segs + '</div><span class="v">' + v + '</span></div>';
     }).join('');
     var waits = [];
