@@ -8,6 +8,7 @@ import * as _claim from './claim.mjs';
 import * as _herdr from './adapters/herdr.mjs';
 import { missingInWords } from './readiness.js';
 import { awaitingDialogReply } from './relay.js';
+import type { RunCost } from './cost.js';
 const { issueKeyOf } = _claim as Record<string, any>;
 const { isRunsWorkspace, workspaceOwner } = _herdr as Record<string, any>;
 
@@ -194,6 +195,8 @@ export function runState(run: any, agent: any, { othersLive = false, reviewer = 
  *   events    parseLog() of the watcher's log
  *   index     indexSnapshot() of herdr
  *   sizes     { [runKey]: runSize() result } for whichever runs the caller measured
+ *   costs     { [runKey]: { usd, outputTokens, cacheReadTokens } } for the Claude Code runs whose
+ *             transcript had a cost record (cost.ts); any other run's cost is null, shown as unknown
  *   registry  the registry entry for this repo, or null
  *   seen      the caller's memory between ticks for settle(): pass the same object every tick,
  *             or nothing for a one-shot view that shows what herdr says right now
@@ -204,13 +207,13 @@ export function runState(run: any, agent: any, { othersLive = false, reviewer = 
 export interface HerdrIndex { agents: Map<string, any>; workspaces: Map<string, any>; panes: Map<string, any>; version: string | null; available: boolean }
 
 export interface ProjectionInput {
-  id: string; teamId?: string; repo: string; config?: any; state?: { runs: Record<string, any> }; events?: TimelineEvent[]; index?: HerdrIndex; sizes?: Record<string, any>;
+  id: string; teamId?: string; repo: string; config?: any; state?: { runs: Record<string, any> }; events?: TimelineEvent[]; index?: HerdrIndex; sizes?: Record<string, any>; costs?: Record<string, RunCost>;
   registry?: any; stale?: boolean; enrich?: { issues: Record<string, any>; prs: Record<string, any>; branches: Record<string, any> }; cleared?: Record<string, number>;
   seen?: Record<string, any> | null; settleMs?: number; now?: number; recipeRevision?: number | null; trackerScope?: string | null;
   readiness?: Record<string, any>; openIssues?: Array<{ identifier: string; title?: string; url?: string | null; updatedAt?: string }> | null;
 }
 
-export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {} }, events = [], index = indexSnapshot(null), sizes = {}, registry = null, stale = false, enrich = { issues: {}, prs: {}, branches: {} }, cleared = {}, seen = null, settleMs = SETTLE_MS, now = Date.now(), recipeRevision = null, trackerScope = null, readiness = {}, openIssues = null }: ProjectionInput) {
+export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {} }, events = [], index = indexSnapshot(null), sizes = {}, costs = {}, registry = null, stale = false, enrich = { issues: {}, prs: {}, branches: {} }, cleared = {}, seen = null, settleMs = SETTLE_MS, now = Date.now(), recipeRevision = null, trackerScope = null, readiness = {}, openIssues = null }: ProjectionInput) {
   const name = config.name || registry?.name || repo.split('/').pop();
   const tracker = typeof config.tracker === 'object' ? config.tracker?.type : (config.tracker || registry?.tracker || 'linear');
   const rules = (config.rules || []).filter((r: any) => r.enabled !== false).map((r: any) => ({
@@ -244,6 +247,7 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
     const started = Date.parse(run.startedAt || '') || now;
     const finished = Date.parse(run.finishedAt || '') || null;
     const size = sizes[key] || null;
+    const agentKind = rules.find((r: any) => r.name === run.rule)?.agent || 'claude';
     // A PR is a person's to merge from the moment the last role on the task has finished with it.
     const waitingSince = st.needsYou === 'merge' ? Math.max(finished || now, ...siblings.map((o: any) => Date.parse(o.finishedAt || '') || 0)) : null;
     // The PR's wait as an interval: open (`to` null: until now) while a person is the one being
@@ -265,7 +269,7 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
     const owner = workspaceOwner(run, repo);
     return {
       key, role: run.role || null, rule: run.rule, pass: run.pass || 1, status: run.status, ownsPr: ownsPr(run),
-      agent: run.agentName, agentKind: rules.find((r: any) => r.name === run.rule)?.agent || 'claude', agentStatus: agent?.agent_status || null, agentAlive: !!agent,
+      agent: run.agentName, agentKind, agentStatus: agent?.agent_status || null, agentAlive: !!agent,
       // Still open in herdr: the snapshot lists it, in this repository, under this run's label or
       // with this run's agent standing in it — herdr reuses a closed workspace's id after a
       // restart, and a stranger's workspace under the run's old id is not this run's to close
@@ -280,6 +284,8 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
       result: run.result ? (() => { const v = verdictOf(run.result); return { status: run.result.status, prUrl: run.result.prUrl || null, summary: run.result.summary || '', notes: run.result.notes || '', live: !!run.resultIsLive, verdict: v.verdict === 'unknown' ? null : v.verdict, verdictSource: v.source === 'none' ? null : v.source, verdictHead: v.headSha }; })() : null,
       prUrl: run.prUrl || run.result?.prUrl || null, error: run.error || null,
       segments: segs, humanWaitMs: humanWaitMs(run, segs, now, { waiting: st.needsYou === 'merge', since: mergeWait?.from, until: mergeWait?.to || undefined }), evidence, size, waitingSince, mergeWait,
+      // What Claude Code says the run has cost so far; null when unknown (another agent, no transcript).
+      cost: agentKind === 'claude' ? costs[key] || null : null,
       recipeRevision: run.recipeRevision ?? null, attemptId: run.attemptId ?? null,
       // What the idle check said the stopped agent is doing, when it was asked; see idle-check.ts.
       idleKind: run.idleKind || null,
@@ -324,6 +330,7 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
       key: iss.key, title: iss.title, url: iss.url, bucket, light, phrase,
       prUrl: anyPr, merged, prState: prStateOf, issueState, cleared: isCleared, slots, startedAt: new Date(startedAt).toISOString(), elapsedMs: lastEnd - startedAt,
       humanWaitMs: iss.runs.reduce((s: any, r: any) => s + r.humanWaitMs, 0), size, runs: iss.runs,
+      cost: sumCosts(iss.runs),
       // A task with a run whose dialogs were never recorded reports a floor, and says so.
       evidence: iss.runs.some((r: any) => r.evidence === 'partial') ? 'partial' : 'events',
       finishedAt: iss.runs.every((r: any) => r.finishedAt) ? new Date(lastEnd).toISOString() : null,
@@ -402,6 +409,7 @@ export function teamView({ id, teamId = id, repo, config = {}, state = { runs: {
     watcher: { version: registry?.version || null, lastPoll: registry?.lastPoll || null, stale, workspaceId: registry?.workspaceId || null, pid: registry?.pid || null },
     counts: { running, working, alerts: alerts.length, inflight: issues.filter((i: any) => i.bucket === 'inflight').length, merged: issues.filter((i: any) => i.bucket === 'merged').length, done: issues.filter((i: any) => i.bucket === 'done').length },
     humanWaitMs: issues.reduce((s: any, i: any) => s + i.humanWaitMs, 0),
+    cost: sumCosts(allRuns),
     recipeRevision, teamId,
     production: { today: production(issues, windows.today, now), week: production(issues, windows.week, now), month: production(issues, windows.month, now) },
     alerts, issues,
@@ -448,6 +456,18 @@ function idleText(kind: string | null, workspaceId: string | null): string {
   if (kind === 'errored') return `Stopped on an error without a result in ${ws}.`;
   if (kind === 'finished') return `Seems finished but has not written its result; weawr asked it to, in ${ws}.`;
   return `Stopped without a result and is probably asking a question in ${ws}.`;
+}
+
+/**
+ * The known costs of some runs added up, and how many of them were known; null when none was.
+ * A run whose cost is unknown adds nothing, so the sum is a floor whenever `runs` < the runs there are.
+ */
+export function sumCosts(runs: Array<{ cost?: RunCost | null }>): (RunCost & { runs: number }) | null {
+  const known = runs.map((r) => r.cost).filter((c): c is RunCost => !!c);
+  if (!known.length) return null;
+  const total = { usd: 0, outputTokens: 0, cacheReadTokens: 0, runs: 0 };
+  for (const c of known) { total.usd += c.usd; total.outputTokens += c.outputTokens; total.cacheReadTokens += c.cacheReadTokens; total.runs++; }
+  return total;
 }
 
 function clip(s: any, n: number): string { s = String(s); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; }

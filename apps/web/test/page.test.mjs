@@ -143,3 +143,27 @@ test('a run blocked on a question dialog shows the question, a button per option
   const noType = snapshot('online'); noType.teams[0].issues[0].runs[0].dialog = { ...dialog, typeOption: null };
   assert.doesNotMatch(renderPage({ hash: '#/f/app', snapshot: noType }), /data-answer-text/);
 });
+
+test('the console shows what each run cost, the task\'s and the team\'s totals, and a dash where the cost is unknown', () => {
+  const run = (key, role, over) => ({ key, role, rule: role, pass: 1, status: 'done', ownsPr: role === 'impl', agent: `a-${role}`, agentKind: 'claude', agentStatus: null, agentAlive: false, workspaceId: null, workspaceLabel: null, workspaceOpen: false, branch: null, worktree: null, startedAt: '2026-09-08T10:00:00Z', finishedAt: '2026-09-08T11:00:00Z', elapsedMs: 3600e3, light: 'grey', phrase: 'PR open', needsYou: null, settling: null, settled: null, result: null, prUrl: null, error: null, segments: [], humanWaitMs: 0, evidence: 'events', size: null, cost: null, waitingSince: null, ...over });
+  const issue = { key: 'GH-7', title: 'Seven', url: 'https://x/7', bucket: 'inflight', light: 'green', phrase: 'working', startedAt: '2026-09-08T10:00:00Z', finishedAt: null, elapsedMs: 60000, humanWaitMs: 0, cleared: false, prUrl: null, prState: null, issueState: 'open', size: null,
+    cost: { usd: 1.42, outputTokens: 1200, cacheReadTokens: 90000, runs: 1 },
+    slots: [{ role: 'impl', light: 'green', phrase: 'working' }, { role: 'review', light: 'grey', phrase: 'PR open' }],
+    runs: [run('GH-7@impl', 'impl', { cost: { usd: 1.42, outputTokens: 1200, cacheReadTokens: 90000 } }), run('GH-7@review', 'review', { agentKind: 'codex' })] };
+  const week = { finished: 0, merged: 0, workingMs: 0, humanMs: 0 };
+  const team = { teamId: 'fx', id: 'app', name: 'app', repo: '/nowhere', tracker: 'github', owner: { status: 'online' }, watcher: { version: '0', lastPoll: null, stale: false, workspaceId: null, pid: 1 }, counts: { running: 1, working: 1, alerts: 0, inflight: 1, merged: 0, done: 0 }, humanWaitMs: 0,
+    cost: { usd: 8.39, outputTokens: 5000, cacheReadTokens: 200000, runs: 2 },
+    roles: ['impl', 'review'], rules: [{ name: 'impl', role: 'impl', match: 'label:ai', agent: 'claude', model: null, effort: null, basedOn: null, passes: 1, maxConcurrent: 2 }], maxConcurrent: 3, pollSeconds: 30, production: { today: week, week, month: week }, live: { tracker: true, github: true, why: null },
+    alerts: [], issues: [issue] };
+  const snapshot = { protocolVersion: 1, hostname: 'fixture', version: '0', herdr: { connected: true, version: '9' }, generatedAt: new Date().toISOString(), teams: [team] };
+  const overview = renderPage({ hash: '#/f/app', snapshot });
+  assert.match(overview, /<span class="usd"[^>]*>\$1\.42<\/span><\/small>/, 'the task row carries its cost');
+  assert.match(overview, /\$8\.39 spent/, 'the team card carries the team total');
+  assert.match(overview, /agents cost <b class="usd"[^>]*>\$8\.39<\/b>/, 'and so does the footer');
+  assert.match(renderPage({ hash: '#/', snapshot }), /\$8\.39 spent/, 'and the team\'s plant on the index');
+  const detail = renderPage({ hash: '#/i/app/GH-7', snapshot });
+  assert.match(detail, />\$1\.42<\/span> · /, 'the impl run\'s cost');
+  assert.match(detail, />—<\/span> · /, 'the codex run\'s cost is unknown, not zero');
+  const none = JSON.parse(JSON.stringify(snapshot)); none.teams[0].cost = null; none.teams[0].issues[0].cost = null;
+  assert.match(renderPage({ hash: '#/f/app', snapshot: none }), /— spent/);
+});

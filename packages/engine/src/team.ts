@@ -56,6 +56,8 @@ import type { QuestionDialog } from './question-dialog.js';
 import { IDLE_CHECK_KEY_ENV, IDLE_TAIL_LINES, askIdle } from './idle-check.js';
 import type { IdleKind } from './idle-check.js';
 import { teamView, indexSnapshot, timelineOf } from './projection.js';
+import { claudeTranscript, lastCostState } from './cost.js';
+import type { RunCost } from './cost.js';
 import { trackerScope as scopeOf } from './identity.js';
 import * as _gitSize from './adapters/git-size.mjs';
 const { complexity, runSize } = _gitSize as Record<string, any>;
@@ -163,6 +165,8 @@ export class TeamEngine {
   /** Observations for the snapshot: herdr's index (cached briefly), sizes, enrichment, the settle memory. */
   private herdrCache: { at: number; index: any; snapshot: any } | null = null;
   private sizes = new Map<string, { at: number; value: any }>();
+  /** Each run's cost, kept against the transcript it came from: re-read only once the file has changed. */
+  private costs = new Map<string, { file: string; size: number; mtimeMs: number; value: RunCost | null }>();
   private seen: Record<string, any> = {};
   private enricher: Enricher | null = null;
   private snapshotCache: { at: number; value: TeamSnapshot } | null = null;
@@ -2040,6 +2044,25 @@ export class TeamEngine {
   }
 
   /**
+   * What a Claude Code run has cost so far: the last `cost-state` record in its session's
+   * transcript (cost.ts). Only for a run in a worktree of its own — in the repository itself the
+   * transcripts are anyone's sessions there — and only a changed transcript is read again.
+   */
+  costFor(key: string, run: any): RunCost | null {
+    const rule = this.cfg.rules.find((r: any) => r.name === run.rule);
+    if ((rule?.agentKind || this.cfg.defaults?.agentKind || 'claude') !== 'claude') return null;
+    const dir = run.workDir || run.worktreePath;
+    if (!dir || path.resolve(dir) === path.resolve(this.paths.repo)) return null;
+    const t = claudeTranscript(dir, (Date.parse(run.startedAt || '') || 0) - 60_000);
+    if (!t) return null;
+    const c = this.costs.get(key);
+    if (c && c.file === t.file && c.size === t.size && c.mtimeMs === t.mtimeMs) return c.value;
+    const value = lastCostState(t.file);
+    this.costs.set(key, { ...t, value });
+    return value;
+  }
+
+  /**
    * The canonical snapshot of this team: what every client renders. Computed from the store's
    * runs and events, herdr's index, the sizes and the enrichment; memoised briefly. `owner` says
    * this process is online; a reader building a snapshot for an offline team uses
@@ -2053,6 +2076,8 @@ export class TeamEngine {
     for (const [key, run] of Object.entries<any>(this.state.runs)) runs[key] = liveResult(run);
     const sizes: Record<string, any> = {};
     for (const [key, run] of Object.entries(runs)) { const sz = await this.sizeFor(key, run, nowMs); if (sz) sizes[key] = sz; }
+    const costs: Record<string, RunCost> = {};
+    for (const [key, run] of Object.entries(runs)) { const c = this.costFor(key, run); if (c) costs[key] = c; }
     const events = isDurable(this.store) ? timelineOf(this.store.eventsAfter(0, 100_000)) : [];
     const cleared: Record<string, number> = {};
     if (isDurable(this.store)) for (const a of this.store.acknowledgements()) cleared[a.issueKey] = Date.parse(a.at) || 0;
@@ -2061,7 +2086,7 @@ export class TeamEngine {
     if (this.cfg.readiness) for (const i of this.lastOpenIssues || []) { const v = this.readinessMemo(i.identifier); if (v) readiness[i.identifier] = v; }
     const enricher = this.enrichment();
     const view = teamView({
-      id: slug(this.cfg.name), teamId: this.ids.teamId, repo: this.paths.repo, config: this.cfg, state: { runs }, events, index, sizes,
+      id: slug(this.cfg.name), teamId: this.ids.teamId, repo: this.paths.repo, config: this.cfg, state: { runs }, events, index, sizes, costs,
       registry: this.lastRegistration, stale: false, enrich: enricher.view(), cleared, seen: this.seen, now: nowMs,
       recipeRevision: this.recipeRevision, trackerScope: scopeOf(this.cfg.trackerSpec), readiness, openIssues: this.lastOpenIssues,
     });

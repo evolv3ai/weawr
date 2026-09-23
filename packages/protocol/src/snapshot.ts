@@ -29,6 +29,11 @@ export const freshnessSchema = s.object({
 
 export const sizeSchema = s.object({ added: s.number(), removed: s.number(), files: s.number(), paths: s.array(s.string()), commits: s.array(s.object({ sha: s.string(), subject: s.string() })), complexity: s.maybe(s.object({ grade: s.string(), why: s.string() })) });
 
+/** What Claude Code's transcript says a run cost: dollars, output tokens and tokens read from the prompt cache. */
+export const costSchema = s.object({ usd: s.number(), outputTokens: s.number(), cacheReadTokens: s.number() });
+/** Several runs' costs added up; `runs` is how many had one, so a total over fewer runs than there are is a floor. */
+export const costTotalSchema = s.object({ usd: s.number(), outputTokens: s.number(), cacheReadTokens: s.number(), runs: s.number() });
+
 export const segmentSchema = s.object({ from: s.number(), to: s.number(), kind: s.enum(['working', 'blocked', 'question', 'done']) });
 
 /** One role's run on a task: the display facts, never the persistence record. */
@@ -75,6 +80,8 @@ export const runViewSchema = s.object({
   humanWaitMs: s.number(),
   evidence: s.enum(['events', 'partial']),
   size: s.maybe(sizeSchema),
+  /** Claude Code's running total for the run's session; null for another agent kind, or when no transcript or record was found. */
+  cost: s.maybe(costSchema),
   waitingSince: s.maybe(s.number()),
   mergeWait: s.maybe(s.object({ from: s.number(), to: s.maybe(s.number()) })),
   recipeRevision: s.maybe(s.number()),
@@ -100,6 +107,8 @@ export const taskViewSchema = s.object({
   humanWaitMs: s.number(),
   evidence: s.maybe(s.enum(['events', 'partial'])),
   size: s.maybe(sizeSchema),
+  /** The task's runs' known costs added up; null when none is known. */
+  cost: s.maybe(costTotalSchema),
   runs: s.array(runViewSchema),
   finishedAt: s.maybe(s.string()),
   /** What a person should do, if anything, decided by the engine. */
@@ -135,6 +144,8 @@ export const teamSnapshotSchema = s.object({
   watcher: s.object({ version: s.maybe(s.string()), lastPoll: s.maybe(s.string()), stale: s.boolean(), workspaceId: s.maybe(s.string()), pid: s.maybe(s.number()) }),
   counts: s.object({ running: s.number(), working: s.number(), alerts: s.number(), inflight: s.number(), merged: s.number(), done: s.number() }),
   humanWaitMs: s.number(),
+  /** Every run's known cost on the team added up; null when none is known. */
+  cost: s.maybe(costTotalSchema),
   production: s.object({ today: productionSchema, week: productionSchema, month: productionSchema }),
   alerts: s.array(alertSchema),
   issues: s.array(taskViewSchema),

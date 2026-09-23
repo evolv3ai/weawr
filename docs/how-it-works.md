@@ -274,13 +274,20 @@ Four screens, in Factorio's idiom — the look the console has always had:
   **Alerts** (one card per task that needs a person, with what to do about it), **Assembling**
   (one row per open issue, with the roles on it and how long it has waited on you), and **Output
   today** (one plain line per finished task; the roles are on the detail screen). Every task shows
-  lines added and removed with a size grade, and the state of its issue and its pull request. The
-  belt across the top carries the team's four numbers.
+  lines added and removed with a size grade, the state of its issue and its pull request, and what
+  its agents cost; the team's total spend is in the team card and the footer. The belt across the
+  top carries the team's four numbers.
 - **Issue detail.** Links to the issue and the PR, a timeline bar per role (working, blocked,
   waiting on you, done) plus a "you" row, lines added and removed with a size grade and its reason,
-  each role's report, a merged scrollback (the last 100 lines of every agent on the task, one
+  what each role cost, each role's report, a merged scrollback (the last 100 lines of every agent on the task, one
   block per role in that role's colour, read only; while an agent is working, herdr can only
   give the screen it is showing right now, so the block is shorter), and one **Mark done** button.
+- **Cost.** For a Claude Code run, the last `cost-state` record in its session transcript
+  (`~/.claude/projects/<worktree path with every non-alphanumeric as ->/`, the newest `.jsonl`
+  written since the run started): dollars, output tokens and cache-read tokens, read from the end
+  of the file and again only once the file changes. Another agent kind, a run with no worktree of
+  its own, or no transcript or record shows **—**; a task's or team's total adds the costs that are
+  known.
 - **Team picker.** In the title bar on every screen: all teams, then each one with its
   tracker, last poll, running and alert counts, and a watcher not seen for three polls marked
   stale.
