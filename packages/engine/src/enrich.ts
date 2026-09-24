@@ -5,8 +5,10 @@
 import * as _pr from './adapters/pr.mjs';
 const { prForBranch, prState } = _pr as Record<string, any>;
 
-// One call per task, refreshed every 90s for tasks that are in flight or finished this week, every
-// 30 min for the rest. A few calls a minute, well inside either API's budget.
+// One call per task. GitHub is asked every 90s for tasks that are in flight or finished this week,
+// every 30 min for the rest. The tracker is asked every 90s only while a task is in flight: a
+// finished task's issue moves rarely, and Linear's budget (2,500 requests an hour) is the tighter
+// one, which a team with a week of finished tasks used up at 90s each.
 const LIVE_TTL = 90_000;
 const OLD_TTL = 30 * 60_000;
 const WEEK = 7 * 86400e3;
@@ -47,7 +49,8 @@ export class Enricher {
     for (const iss of issues) {
       const recent = iss.bucket === 'inflight' || (iss.finishedAt && now - Date.parse(iss.finishedAt) < WEEK);
       const ttl = recent ? LIVE_TTL : OLD_TTL;
-      if (tracker && now - (this.issues.get(iss.key)?.at || 0) > ttl) due.push({ kind: 'issue', key: iss.key });
+      const trackerTtl = iss.bucket === 'inflight' ? LIVE_TTL : OLD_TTL;
+      if (tracker && now - (this.issues.get(iss.key)?.at || 0) > trackerTtl) due.push({ kind: 'issue', key: iss.key });
       if (iss.prUrl && this.prs.get(iss.prUrl)?.state !== 'merged' && now - (this.prs.get(iss.prUrl)?.at || 0) > ttl) due.push({ kind: 'pr', url: iss.prUrl });
       if (!iss.prUrl && ghRepo) for (const r of iss.runs) {
         if (!r.branch) continue;
